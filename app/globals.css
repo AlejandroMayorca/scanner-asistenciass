@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #09090b;
+  --surface: #111113;
+  --surface2: #18181b;
+  --border: #27272a;
+  --text: #fafafa;
+  --muted: #71717a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #18181b inset;
+  -webkit-text-fill-color: #fafafa;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+@keyframes fadeIn  { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
+@keyframes slideUp { from { opacity:0; transform:translateY(24px)} to { opacity:1; transform:translateY(0) } }
+@keyframes scanLine { 0%,100%{top:10%} 50%{top:85%} }
+
+.animate-fadeIn  { animation: fadeIn  0.25s ease both; }
+.animate-slideUp { animation: slideUp 0.3s  ease both; }
+.scan-line { animation: scanLine 2s ease-in-out infinite; }
