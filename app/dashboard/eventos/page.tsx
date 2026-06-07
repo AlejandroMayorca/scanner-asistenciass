@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Calendar, Plus, Search, Users, Trash2, Link as LinkIcon } from 'lucide-react'
-import { getEventos, crearEvento, deleteEvento, getTotalAsistentes } from '../../lib/firestore'
+import { AlertCircle, Calendar, Plus, Search, Users, Trash2, Link as LinkIcon } from 'lucide-react'
+import { crearEvento, deleteEvento, getTotalAsistentes } from '../../lib/firestore'
+import { db } from '../../lib/firebase'
+import { collection, onSnapshot, orderBy, query, Timestamp } from 'firebase/firestore'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../../components/ui/Modal'
 import { Spinner } from '../../components/ui/Spinner'
 import { DashboardHeader } from '../../components/layout/DashboardHeader'
 import type { Evento } from '../../lib/types'
-import { Timestamp } from 'firebase/firestore'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 
@@ -23,23 +24,41 @@ export default function EventosPage() {
   const { profile } = useAuth()
   const [eventos, setEventos] = useState<(Evento & { totalAsistentes: number })[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ nombre: '', lugar: '', descripcion: '', fecha: '' })
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
 
-  const load = async () => {
+  // Real-time listener for eventos collection
+  useEffect(() => {
     setLoading(true)
-    const evs = await getEventos()
-    const withTotal = await Promise.all(
-      evs.map(async e => ({ ...e, totalAsistentes: await getTotalAsistentes(e.id!) }))
+    const q = query(collection(db, 'eventos'), orderBy('fecha', 'desc'))
+    const unsub = onSnapshot(
+      q,
+      async (snap) => {
+        try {
+          const evs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Evento))
+          const withTotal = await Promise.all(
+            evs.map(async e => ({ ...e, totalAsistentes: await getTotalAsistentes(e.id!) }))
+          )
+          setEventos(withTotal)
+          setError(null)
+        } catch (err) {
+          setError('Error al procesar los eventos. Verifica tu conexión a Firestore.')
+        } finally {
+          setLoading(false)
+        }
+      },
+      (err) => {
+        setError(`No se pudieron cargar los eventos: ${err.message}`)
+        setLoading(false)
+      },
     )
-    setEventos(withTotal)
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+    return () => unsub()
+  }, [])
 
   const filtered = eventos.filter(e =>
     e.nombre.toLowerCase().includes(search.toLowerCase()) ||
@@ -50,17 +69,25 @@ export default function EventosPage() {
     e.preventDefault()
     if (!form.nombre || !form.fecha || !form.lugar || !profile) return
     setSaving(true)
-    await crearEvento({ nombre: form.nombre, descripcion: form.descripcion, lugar: form.lugar, fecha: new Date(form.fecha) }, profile.id)
-    setSaving(false)
-    setShowModal(false)
-    setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' })
-    load()
+    setSaveError(null)
+    try {
+      await crearEvento({ nombre: form.nombre, descripcion: form.descripcion, lugar: form.lugar, fecha: new Date(form.fecha) }, profile.id)
+      setShowModal(false)
+      setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' })
+    } catch (err) {
+      setSaveError('Error al crear el evento. Verifica tu conexión e inténtalo de nuevo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleDelete = async (id: string) => {
-    await deleteEvento(id)
-    setConfirmDel(null)
-    load()
+    try {
+      await deleteEvento(id)
+      setConfirmDel(null)
+    } catch {
+      setError('No se pudo eliminar el evento. Intenta de nuevo.')
+    }
   }
 
   const copyLink = (id: string) => {
@@ -78,15 +105,21 @@ export default function EventosPage() {
             <h1 className="text-xl font-bold text-white">Eventos</h1>
             <p className="text-zinc-500 text-sm mt-0.5">{eventos.length} evento{eventos.length !== 1 ? 's' : ''} registrado{eventos.length !== 1 ? 's' : ''}</p>
           </div>
-          {profile?.rol === 'admin' && (
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition"
-            >
-              <Plus size={16} /> Nuevo Evento
-            </button>
-          )}
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition active:scale-95"
+          >
+            <Plus size={16} /> Nuevo Evento
+          </button>
         </div>
+
+        {/* Firestore error banner */}
+        {error && (
+          <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-5 text-sm text-red-400">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
 
         {/* Search */}
         <div className="relative mb-5">
@@ -205,8 +238,14 @@ export default function EventosPage() {
               className="w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition resize-none"
             />
           </div>
+          {saveError && (
+            <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+              <AlertCircle size={14} className="shrink-0" />
+              {saveError}
+            </div>
+          )}
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => { setShowModal(false); setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' }) }} className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+            <button type="button" onClick={() => { setShowModal(false); setSaveError(null); setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' }) }} className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
               Cancelar
             </button>
             <button type="submit" disabled={saving} className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 transition disabled:opacity-60 flex items-center justify-center gap-2">
