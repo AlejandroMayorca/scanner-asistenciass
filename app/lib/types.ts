@@ -23,6 +23,7 @@ export interface Evento {
   id?: string
   nombre: string
   descripcion: string
+  lugar?: string
   fecha: Timestamp | Date
   creadoPor: string
   activo: boolean

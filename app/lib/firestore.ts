@@ -8,7 +8,7 @@ import type { Evento, Asistente, UserProfile } from './types'
 // ─── Eventos ────────────────────────────────────────────────────────────────
 
 export async function crearEvento(
-  data: { nombre: string; descripcion: string; fecha: Date },
+  data: { nombre: string; descripcion: string; lugar?: string; fecha: Date },
   uid: string,
 ): Promise<string> {
   const ref = await addDoc(collection(db, 'eventos'), {
