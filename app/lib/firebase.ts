@@ -8,9 +8,9 @@ const firebaseConfig = {
   authDomain: "scanner-eventos.firebaseapp.com",
   projectId: "scanner-eventos",
   storageBucket: "scanner-eventos.firebasestorage.app",
-  messagingSenderId: "121882361856",
-  appId: "1:121882361856:web:e08748ae773871368d0c85",
-  measurementId: "G-6VDBV61CGC",
+  messagingSenderId: "121082361056",
+  appId: "1:121082361056:web:e00740ae773071368d0c85",
+  measurementId: "G-6YDBV61CGC",
 }
 
 const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
