@@ -17,6 +17,7 @@ export async function crearEvento(
     creadoPor: uid,
     activo: true,
     createdAt: serverTimestamp(),
+    creadoEn: serverTimestamp(),
   })
   return ref.id
 }
