@@ -3,7 +3,7 @@ import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBR8B8T82fuahshq-YAPn2fj91AjQ_bZmE",
+  apiKey: "AIzaSyBR888T82fuahshq-YAPn2fj91AjQ_bZmE",
   authDomain: "scan-eventos.firebaseapp.com",
   projectId: "scan-eventos",
   storageBucket: "scan-eventos.firebasestorage.app",
