@@ -15,16 +15,16 @@ export function calcStats(asistentes: Asistente[]): Stats {
       : null
 
   const gruposEdad: Record<string, number> = {
-    '18-25': 0, '26-35': 0, '36-45': 0, '46-60': 0, '60+': 0, 'N/A': 0,
+    '14-17': 0, '18-25': 0, '26-35': 0, '36-50': 0, '51+': 0, 'N/A': 0,
   }
   for (const a of asistentes) {
     const e = a.edad ?? null
     if (e === null) gruposEdad['N/A']++
+    else if (e <= 17) gruposEdad['14-17']++
     else if (e <= 25) gruposEdad['18-25']++
     else if (e <= 35) gruposEdad['26-35']++
-    else if (e <= 45) gruposEdad['36-45']++
-    else if (e <= 60) gruposEdad['46-60']++
-    else gruposEdad['60+']++
+    else if (e <= 50) gruposEdad['36-50']++
+    else gruposEdad['51+']++
   }
 
   const hourly = Array<number>(24).fill(0)

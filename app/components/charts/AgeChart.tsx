@@ -4,8 +4,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 
 interface Props { gruposEdad: Record<string, number> }
 
-const COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#71717a']
-const GROUPS = ['18-25', '26-35', '36-45', '46-60', '60+', 'N/A']
+const COLORS = ['#f59e0b', '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#71717a']
+const GROUPS = ['14-17', '18-25', '26-35', '36-50', '51+', 'N/A']
 
 export function AgeChart({ gruposEdad }: Props) {
   const data = GROUPS.map((g, i) => ({ grupo: g, count: gruposEdad[g] ?? 0, color: COLORS[i] }))

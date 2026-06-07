@@ -2,6 +2,45 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { Users, TrendingUp, Clock, Calendar } from 'lucide-react'
+
+const AGE_GROUPS = [
+  { key: '14-17', label: '14 – 17 años', color: 'bg-amber-500' },
+  { key: '18-25', label: '18 – 25 años', color: 'bg-blue-500' },
+  { key: '26-35', label: '26 – 35 años', color: 'bg-violet-500' },
+  { key: '36-50', label: '36 – 50 años', color: 'bg-cyan-500' },
+  { key: '51+',   label: '51 + años',    color: 'bg-emerald-500' },
+  { key: 'N/A',   label: 'Sin dato',     color: 'bg-zinc-600' },
+]
+
+function AgeGroupTable({ gruposEdad }: { gruposEdad: Record<string, number> }) {
+  const conDato = Object.entries(gruposEdad)
+    .filter(([k]) => k !== 'N/A')
+    .reduce((s, [, v]) => s + v, 0)
+
+  return (
+    <div className="space-y-2">
+      {AGE_GROUPS.map(({ key, label, color }) => {
+        const count = gruposEdad[key] ?? 0
+        const pct   = conDato > 0 && key !== 'N/A' ? Math.round((count / conDato) * 100) : 0
+        return (
+          <div key={key} className="flex items-center gap-3">
+            <span className="w-24 shrink-0 text-xs text-zinc-400">{label}</span>
+            <div className="flex-1 h-2 bg-[#27272a] rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${color} transition-all`}
+                style={{ width: key === 'N/A' ? '0%' : `${pct}%` }}
+              />
+            </div>
+            <span className="w-8 text-right text-xs font-semibold text-white">{count}</span>
+            <span className="w-9 text-right text-xs text-zinc-500">
+              {key !== 'N/A' ? `${pct}%` : ''}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 import { getDocs, collection, query, orderBy } from 'firebase/firestore'
 import { db } from '../../lib/firebase'
 import { calcStats, formatHora } from '../../lib/stats'
@@ -109,7 +148,16 @@ export default function EstadisticasPage() {
           </div>
           <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-5">
             <h3 className="text-sm font-semibold text-white mb-4">Distribución de edades</h3>
-            {stats.total > 0 ? <AgeChart gruposEdad={stats.gruposEdad} /> : <p className="text-zinc-600 text-sm py-10 text-center">Sin datos</p>}
+            {stats.total > 0 ? (
+              <>
+                <AgeChart gruposEdad={stats.gruposEdad} />
+                <div className="mt-5">
+                  <AgeGroupTable gruposEdad={stats.gruposEdad} />
+                </div>
+              </>
+            ) : (
+              <p className="text-zinc-600 text-sm py-10 text-center">Sin datos</p>
+            )}
           </div>
         </div>
       </div>
