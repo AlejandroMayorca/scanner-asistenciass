@@ -1,26 +1,21 @@
 import {
-  collection, doc, addDoc, updateDoc, deleteDoc,
-  getDocs, getDoc, query, where, orderBy, Timestamp, serverTimestamp,
+  collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDoc, getDocs,
+  query, where, orderBy, Timestamp, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
-import type { Evento, Asistente, UserProfile } from './types'
+import type { Evento, Asistencia, UserProfile } from './types'
 
-// ─── Eventos ────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-export async function crearEvento(
-  data: { nombre: string; descripcion: string; lugar?: string; fecha: Date },
-  uid: string,
-): Promise<string> {
-  const ref = await addDoc(collection(db, 'eventos'), {
-    ...data,
-    fecha: Timestamp.fromDate(data.fecha),
-    creadoPor: uid,
-    activo: true,
-    createdAt: serverTimestamp(),
-    creadoEn: serverTimestamp(),
-  })
-  return ref.id
+export function toDate(v: unknown): Date {
+  if (v instanceof Timestamp) return v.toDate()
+  if (v instanceof Date) return v
+  if (v && typeof v === 'object' && 'seconds' in v)
+    return new Date((v as { seconds: number }).seconds * 1000)
+  return new Date()
 }
+
+// ── Eventos ───────────────────────────────────────────────────────────────────
 
 export async function getEventos(): Promise<Evento[]> {
   const snap = await getDocs(query(collection(db, 'eventos'), orderBy('fecha', 'desc')))
@@ -32,88 +27,106 @@ export async function getEvento(id: string): Promise<Evento | null> {
   return snap.exists() ? ({ id: snap.id, ...snap.data() } as Evento) : null
 }
 
-export async function updateEvento(id: string, data: Partial<Evento>) {
-  await updateDoc(doc(db, 'eventos', id), data)
-}
-
-export async function deleteEvento(id: string) {
-  await deleteDoc(doc(db, 'eventos', id))
-}
-
-// ─── Asistentes ─────────────────────────────────────────────────────────────
-
-export async function registrarAsistente(data: Omit<Asistente, 'id'>): Promise<string> {
-  const ref = await addDoc(collection(db, 'asistentes'), {
-    ...data,
-    horaIngreso: serverTimestamp(),
+export async function crearEvento(
+  data: { nombre: string; descripcion: string; lugar: string; fecha: Date },
+  uid: string,
+): Promise<string> {
+  const ref = await addDoc(collection(db, 'eventos'), {
+    nombre: data.nombre.trim(),
+    descripcion: data.descripcion.trim(),
+    lugar: data.lugar.trim(),
+    fecha: Timestamp.fromDate(data.fecha),
+    creadoPor: uid,
+    activo: true,
+    creadoEn: serverTimestamp(),
   })
   return ref.id
 }
 
-export async function getAsistentes(eventId: string): Promise<Asistente[]> {
-  const snap = await getDocs(
-    query(collection(db, 'asistentes'), where('eventId', '==', eventId), orderBy('horaIngreso', 'asc')),
-  )
-  return snap.docs.map(d => ({ id: d.id, ...d.data() } as Asistente))
+export async function eliminarEvento(eventoId: string): Promise<void> {
+  const asisSnap = await getDocs(collection(db, 'eventos', eventoId, 'asistencias'))
+  const batch = writeBatch(db)
+  asisSnap.docs.forEach(d => batch.delete(d.ref))
+  batch.delete(doc(db, 'eventos', eventoId))
+  await batch.commit()
 }
 
-export async function checkYaRegistrado(eventId: string, numeroCedula: string): Promise<boolean> {
+// ── Asistencias (subcollection) ───────────────────────────────────────────────
+
+export async function getAsistencias(eventoId: string): Promise<Asistencia[]> {
   const snap = await getDocs(
     query(
-      collection(db, 'asistentes'),
-      where('eventId', '==', eventId),
-      where('numeroCedula', '==', numeroCedula),
+      collection(db, 'eventos', eventoId, 'asistencias'),
+      orderBy('fechaHora', 'asc'),
+    ),
+  )
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as Asistencia))
+}
+
+export async function getTotalAsistencias(eventoId: string): Promise<number> {
+  const snap = await getDocs(collection(db, 'eventos', eventoId, 'asistencias'))
+  return snap.size
+}
+
+export async function checkDuplicado(eventoId: string, cedula: string): Promise<boolean> {
+  const snap = await getDocs(
+    query(
+      collection(db, 'eventos', eventoId, 'asistencias'),
+      where('cedula', '==', cedula),
     ),
   )
   return !snap.empty
 }
 
-export async function getTotalAsistentes(eventId: string): Promise<number> {
-  const snap = await getDocs(
-    query(collection(db, 'asistentes'), where('eventId', '==', eventId)),
-  )
-  return snap.size
+export async function registrarAsistencia(
+  eventoId: string,
+  data: Omit<Asistencia, 'id' | 'fechaHora'>,
+): Promise<void> {
+  await addDoc(collection(db, 'eventos', eventoId, 'asistencias'), {
+    ...data,
+    fechaHora: serverTimestamp(),
+  })
 }
 
-// ─── Usuarios ────────────────────────────────────────────────────────────────
+// ── Usuarios ──────────────────────────────────────────────────────────────────
 
 export async function getUsuarioPerfil(uid: string): Promise<UserProfile | null> {
   const snap = await getDoc(doc(db, 'usuarios', uid))
   return snap.exists() ? ({ id: snap.id, ...snap.data() } as UserProfile) : null
 }
 
-export async function crearUsuarioPerfil(
-  uid: string,
-  data: { email: string; nombre: string; rol: 'admin' | 'ayudante' },
-) {
-  await updateDoc(doc(db, 'usuarios', uid), {
-    ...data,
-    activo: true,
-    createdAt: serverTimestamp(),
-  }).catch(() =>
-    addDoc(collection(db, 'usuarios'), { id: uid, ...data, activo: true, createdAt: serverTimestamp() }),
-  )
-}
-
 export async function setUsuarioPerfil(
   uid: string,
-  data: { email: string; nombre: string; rol: 'admin' | 'ayudante'; activo: boolean },
-) {
-  const ref = doc(db, 'usuarios', uid)
-  const snap = await getDoc(ref)
-  if (snap.exists()) {
-    await updateDoc(ref, data)
-  } else {
-    const { setDoc } = await import('firebase/firestore')
-    await setDoc(ref, { ...data, createdAt: serverTimestamp() })
-  }
+  data: { email: string; rol: 'admin' | 'ayudante'; activo?: boolean },
+): Promise<void> {
+  await setDoc(doc(db, 'usuarios', uid), {
+    email: data.email,
+    rol: data.rol,
+    activo: data.activo ?? true,
+    creadoEn: serverTimestamp(),
+  })
 }
 
 export async function getUsuarios(): Promise<UserProfile[]> {
-  const snap = await getDocs(query(collection(db, 'usuarios'), orderBy('createdAt', 'desc')))
+  const snap = await getDocs(query(collection(db, 'usuarios'), orderBy('creadoEn', 'desc')))
   return snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile))
 }
 
-export async function updateUsuario(id: string, data: Partial<UserProfile>) {
-  await updateDoc(doc(db, 'usuarios', id), data as Record<string, unknown>)
+export async function updateUsuario(uid: string, data: Partial<UserProfile>): Promise<void> {
+  await updateDoc(doc(db, 'usuarios', uid), data as Record<string, unknown>)
+}
+
+// ── Backup ────────────────────────────────────────────────────────────────────
+
+export async function getFullBackup(): Promise<{
+  eventos: (Evento & { asistencias: Asistencia[] })[]
+}> {
+  const eventos = await getEventos()
+  const full = await Promise.all(
+    eventos.map(async ev => ({
+      ...ev,
+      asistencias: await getAsistencias(ev.id!),
+    })),
+  )
+  return { eventos: full }
 }

@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { AlertCircle, Calendar, Plus, Search, Users, Trash2, Link as LinkIcon } from 'lucide-react'
-import { crearEvento, deleteEvento, getTotalAsistentes } from '../../lib/firestore'
+import { useRouter } from 'next/navigation'
+import {
+  AlertCircle, Calendar, MapPin, Plus, Search, Trash2, Users,
+} from 'lucide-react'
+import {
+  collection, onSnapshot, orderBy, query, Timestamp,
+} from 'firebase/firestore'
 import { db } from '../../lib/firebase'
-import { collection, onSnapshot, orderBy, query, Timestamp } from 'firebase/firestore'
+import { crearEvento, eliminarEvento, getTotalAsistencias } from '../../lib/firestore'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../../components/ui/Modal'
 import { Spinner } from '../../components/ui/Spinner'
-import { DashboardHeader } from '../../components/layout/DashboardHeader'
 import type { Evento } from '../../lib/types'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -17,239 +21,294 @@ import { es } from 'date-fns/locale'
 function toDate(v: unknown): Date {
   if (v instanceof Timestamp) return v.toDate()
   if (v instanceof Date) return v
+  if (v && typeof v === 'object' && 'seconds' in v)
+    return new Date((v as { seconds: number }).seconds * 1000)
   return new Date()
 }
 
+const FIELD =
+  'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
+
 export default function EventosPage() {
   const { profile } = useAuth()
-  const [eventos, setEventos] = useState<(Evento & { totalAsistentes: number })[]>([])
+  const isAdmin = profile?.rol === 'admin'
+
+  const [eventos, setEventos] = useState<(Evento & { total: number })[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ nombre: '', lugar: '', descripcion: '', fecha: '' })
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ nombre: '', descripcion: '', lugar: '', fecha: '' })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
 
-  // Real-time listener for eventos collection
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  // Real-time eventos listener
   useEffect(() => {
-    setLoading(true)
     const q = query(collection(db, 'eventos'), orderBy('fecha', 'desc'))
     const unsub = onSnapshot(
       q,
-      async (snap) => {
+      async snap => {
         try {
           const evs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Evento))
           const withTotal = await Promise.all(
-            evs.map(async e => ({ ...e, totalAsistentes: await getTotalAsistentes(e.id!) }))
+            evs.map(async ev => ({ ...ev, total: await getTotalAsistencias(ev.id!) })),
           )
           setEventos(withTotal)
           setError(null)
-        } catch (err) {
-          setError('Error al procesar los eventos. Verifica tu conexión a Firestore.')
+        } catch {
+          setError('Error al cargar eventos')
         } finally {
           setLoading(false)
         }
       },
-      (err) => {
-        setError(`No se pudieron cargar los eventos: ${err.message}`)
+      err => {
+        setError(`Firestore: ${err.code} — ${err.message}`)
         setLoading(false)
       },
     )
     return () => unsub()
   }, [])
 
-  const filtered = eventos.filter(e =>
-    e.nombre.toLowerCase().includes(search.toLowerCase()) ||
-    e.descripcion?.toLowerCase().includes(search.toLowerCase())
+  const filtered = eventos.filter(ev =>
+    ev.nombre.toLowerCase().includes(search.toLowerCase()) ||
+    ev.lugar?.toLowerCase().includes(search.toLowerCase()),
   )
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.nombre || !form.fecha || !form.lugar || !profile) return
+    if (!profile) return
     setSaving(true)
     setSaveError(null)
     try {
-      await crearEvento({ nombre: form.nombre, descripcion: form.descripcion, lugar: form.lugar, fecha: new Date(form.fecha) }, profile.id)
-      setShowModal(false)
-      setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' })
-    } catch (err) {
-      setSaveError('Error al crear el evento. Verifica tu conexión e inténtalo de nuevo.')
+      const [y, m, d] = form.fecha.split('-').map(Number)
+      await crearEvento(
+        { nombre: form.nombre, descripcion: form.descripcion, lugar: form.lugar, fecha: new Date(y, m - 1, d) },
+        profile.id,
+      )
+      setShowCreate(false)
+      setForm({ nombre: '', descripcion: '', lugar: '', fecha: '' })
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string }
+      setSaveError(`${e.code ?? 'Error'}: ${e.message ?? ''}`)
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id: string) => {
+    setDeleting(true)
     try {
-      await deleteEvento(id)
+      await eliminarEvento(id)
       setConfirmDel(null)
-    } catch {
-      setError('No se pudo eliminar el evento. Intenta de nuevo.')
+    } catch (err: unknown) {
+      const e = err as { message?: string }
+      setError(`No se pudo eliminar: ${e.message ?? ''}`)
+    } finally {
+      setDeleting(false)
     }
   }
 
-  const copyLink = (id: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/evento/${id}`)
-      .then(() => alert('¡Link copiado al portapapeles!'))
-  }
-
   return (
-    <>
-      <DashboardHeader title="Eventos" />
-      <div className="px-4 lg:px-8 py-6 max-w-6xl w-full mx-auto">
-        {/* Page header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-bold text-white">Eventos</h1>
-            <p className="text-zinc-500 text-sm mt-0.5">{eventos.length} evento{eventos.length !== 1 ? 's' : ''} registrado{eventos.length !== 1 ? 's' : ''}</p>
-          </div>
+    <div className="px-4 lg:px-8 py-6 max-w-5xl w-full mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-white">Eventos</h1>
+          <p className="text-zinc-500 text-sm mt-0.5">
+            {eventos.length} evento{eventos.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+        {isAdmin && (
           <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition active:scale-95"
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition active:scale-95"
           >
             <Plus size={16} /> Nuevo Evento
           </button>
-        </div>
-
-        {/* Firestore error banner */}
-        {error && (
-          <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-5 text-sm text-red-400">
-            <AlertCircle size={16} className="shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {/* Search */}
-        <div className="relative mb-5">
-          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar evento…"
-            className="w-full bg-[#111113] border border-[#27272a] rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
-          />
-        </div>
-
-        {loading ? (
-          <div className="flex justify-center py-20"><Spinner size="lg" /></div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20 text-zinc-600">
-            <Calendar size={48} className="mx-auto mb-3 opacity-30" />
-            <p>{search ? 'Sin resultados para tu búsqueda' : 'No hay eventos aún'}</p>
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map(ev => (
-              <div key={ev.id} className="bg-[#111113] border border-[#27272a] rounded-2xl p-5 hover:border-zinc-600 transition flex flex-col">
-                {/* Card header */}
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <h3 className="font-semibold text-white truncate flex-1">{ev.nombre}</h3>
-                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 ${ev.activo ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                </div>
-
-                {/* Date + location */}
-                <p className="text-zinc-500 text-xs mb-1">
-                  {format(toDate(ev.fecha), "d MMM yyyy", { locale: es })}
-                  {ev.lugar && <span className="text-zinc-600"> · {ev.lugar}</span>}
-                </p>
-
-                {/* Description */}
-                {ev.descripcion && (
-                  <p className="text-zinc-400 text-xs line-clamp-2 mb-3">{ev.descripcion}</p>
-                )}
-
-                <div className="mt-auto">
-                  {/* Attendees count + utility icons */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-1.5 text-zinc-400 text-sm">
-                      <Users size={14} />
-                      <span className="font-semibold text-white">{ev.totalAsistentes}</span>
-                      <span className="text-xs">asistentes</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => copyLink(ev.id!)} title="Copiar link scanner" className="p-1.5 rounded-lg text-zinc-500 hover:text-blue-400 hover:bg-blue-400/10 transition">
-                        <LinkIcon size={14} />
-                      </button>
-                      {profile?.rol === 'admin' && (
-                        <button onClick={() => setConfirmDel(ev.id!)} className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-400/10 transition">
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Primary action buttons */}
-                  <div className="flex gap-2">
-                    <Link
-                      href={`/dashboard/eventos/${ev.id}/scanner`}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition active:scale-95"
-                    >
-                      📷 Escanear
-                    </Link>
-                    <Link
-                      href={`/dashboard/eventos/${ev.id}/estadisticas`}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-white/8 hover:bg-white/12 text-zinc-300 text-xs font-semibold border border-[#27272a] hover:border-zinc-500 transition active:scale-95"
-                    >
-                      📊 Ver registros
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
         )}
       </div>
 
+      {error && (
+        <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-5 text-sm text-red-400">
+          <AlertCircle size={15} className="shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="relative mb-5">
+        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Buscar evento o lugar…"
+          className={`${FIELD} pl-10`}
+        />
+      </div>
+
+      {/* Events grid */}
+      {loading ? (
+        <div className="flex justify-center py-24">
+          <Spinner size="lg" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-24 text-zinc-600">
+          <Calendar size={48} className="mx-auto mb-3 opacity-30" />
+          <p className="text-base">{search ? 'Sin resultados' : 'No hay eventos aún'}</p>
+          {isAdmin && !search && (
+            <p className="text-sm mt-1">
+              Crea el primer evento con el botón{' '}
+              <span className="text-blue-400">+ Nuevo Evento</span>
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map(ev => (
+            <div
+              key={ev.id}
+              className="bg-[#111113] border border-[#27272a] rounded-2xl p-5 flex flex-col hover:border-zinc-600 transition"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <h3 className="font-semibold text-white leading-snug flex-1">{ev.nombre}</h3>
+                <span
+                  className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full mt-0.5 ${
+                    ev.activo
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : 'bg-zinc-700/60 text-zinc-500'
+                  }`}
+                >
+                  {ev.activo ? 'Activo' : 'Inactivo'}
+                </span>
+              </div>
+
+              {/* Meta */}
+              <div className="space-y-1 mb-3">
+                <p className="flex items-center gap-1.5 text-zinc-500 text-xs">
+                  <Calendar size={12} />
+                  {format(toDate(ev.fecha), "d 'de' MMMM yyyy", { locale: es })}
+                </p>
+                {ev.lugar && (
+                  <p className="flex items-center gap-1.5 text-zinc-500 text-xs truncate">
+                    <MapPin size={12} />
+                    {ev.lugar}
+                  </p>
+                )}
+                {ev.descripcion && (
+                  <p className="text-zinc-600 text-xs line-clamp-2 pt-1">{ev.descripcion}</p>
+                )}
+              </div>
+
+              {/* Count + actions */}
+              <div className="mt-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-1.5 text-zinc-400 text-sm">
+                    <Users size={14} />
+                    <span className="font-bold text-white text-base">{ev.total}</span>
+                    <span className="text-xs">asistentes</span>
+                  </div>
+                  {isAdmin && (
+                    <button
+                      onClick={() => setConfirmDel(ev.id!)}
+                      className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <Link
+                    href={`/dashboard/eventos/${ev.id}/scanner`}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition active:scale-95"
+                  >
+                    📷 Escanear
+                  </Link>
+                  <Link
+                    href={`/dashboard/eventos/${ev.id}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-white/8 hover:bg-white/12 text-zinc-300 text-xs font-semibold border border-[#27272a] hover:border-zinc-500 transition active:scale-95"
+                  >
+                    📊 Ver registros
+                  </Link>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Create modal */}
-      <Modal open={showModal} onClose={() => setShowModal(false)} title="Nuevo evento">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); setSaveError(null) }} title="Nuevo evento">
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Nombre del evento *</label>
+            <label className="block text-xs text-zinc-400 mb-1.5">Nombre *</label>
             <input
-              required value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
+              required
+              value={form.nombre}
+              onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
               placeholder="Festival de verano 2025"
-              className="w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
+              className={FIELD}
             />
           </div>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs text-zinc-400 mb-1.5">Fecha *</label>
-              <input
-                required type="date" value={form.fecha} onChange={e => setForm(f => ({ ...f, fecha: e.target.value }))}
-                className="w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500 transition [color-scheme:dark]"
-              />
-            </div>
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1.5">Fecha *</label>
+            <input
+              required
+              type="date"
+              value={form.fecha}
+              onChange={e => setForm(f => ({ ...f, fecha: e.target.value }))}
+              className={`${FIELD} [color-scheme:dark]`}
+            />
           </div>
           <div>
             <label className="block text-xs text-zinc-400 mb-1.5">Lugar *</label>
             <input
-              required value={form.lugar} onChange={e => setForm(f => ({ ...f, lugar: e.target.value }))}
-              placeholder="Parque principal, Bogotá"
-              className="w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
+              required
+              value={form.lugar}
+              onChange={e => setForm(f => ({ ...f, lugar: e.target.value }))}
+              placeholder="Parque central, Bogotá"
+              className={FIELD}
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Descripción <span className="text-zinc-600">(opcional)</span></label>
+            <label className="block text-xs text-zinc-400 mb-1.5">
+              Descripción <span className="text-zinc-600">(opcional)</span>
+            </label>
             <textarea
-              value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))}
-              rows={2} placeholder="Descripción del evento…"
-              className="w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition resize-none"
+              rows={2}
+              value={form.descripcion}
+              onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))}
+              placeholder="Descripción del evento…"
+              className={`${FIELD} resize-none`}
             />
           </div>
+
           {saveError && (
-            <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
-              <AlertCircle size={14} className="shrink-0" />
+            <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+              <AlertCircle size={13} />
               {saveError}
             </div>
           )}
+
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => { setShowModal(false); setSaveError(null); setForm({ nombre: '', lugar: '', descripcion: '', fecha: '' }) }} className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+            <button
+              type="button"
+              onClick={() => { setShowCreate(false); setSaveError(null) }}
+              className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+            >
               Cancelar
             </button>
-            <button type="submit" disabled={saving} className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 transition disabled:opacity-60 flex items-center justify-center gap-2">
-              {saving ? <><Spinner size="sm" /> Creando…</> : 'Crear evento'}
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 disabled:opacity-60 transition flex items-center justify-center gap-2"
+            >
+              {saving ? <><Spinner size="sm" /> Guardando…</> : 'Crear evento'}
             </button>
           </div>
         </form>
@@ -261,14 +320,28 @@ export default function EventosPage() {
           <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
           <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
             <p className="font-semibold text-white mb-2">¿Eliminar evento?</p>
-            <p className="text-zinc-400 text-sm mb-5">Esta acción no se puede deshacer. Los asistentes registrados se mantendrán.</p>
+            <p className="text-zinc-400 text-sm mb-5">
+              Se eliminarán el evento y <strong className="text-white">todas</strong> sus
+              asistencias registradas. Esta acción no se puede deshacer.
+            </p>
             <div className="flex gap-3">
-              <button onClick={() => setConfirmDel(null)} className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">Cancelar</button>
-              <button onClick={() => handleDelete(confirmDel)} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition">Eliminar</button>
+              <button
+                onClick={() => setConfirmDel(null)}
+                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleDelete(confirmDel)}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-60 transition flex items-center justify-center gap-2"
+              >
+                {deleting ? <><Spinner size="sm" /> Eliminando…</> : 'Eliminar'}
+              </button>
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }

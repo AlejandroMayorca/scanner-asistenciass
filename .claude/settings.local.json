@@ -5,7 +5,25 @@
       "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --no-src-dir --no-import-alias)",
       "PowerShell(taskkill *)",
       "PowerShell(Select-String -Path \"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\\\\.next\\\\dev\\\\server\\\\chunks\\\\ssr\\\\node_modules_@firebase_auth_dist_node-esm_1_8sm_p._.js\" -Pattern \"AIzaSy|TU_API\" | Select-Object -First 5 | ForEach-Object { $_.Line.Substring\\([Math]::Max\\(0,$_.Matches[0].Index-30\\), [Math]::Min\\(80, $_.Line.Length - [Math]::Max\\(0,$_.Matches[0].Index-30\\)\\)\\) })",
-      "PowerShell(Select-String -Path \"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\\\\.next\\\\dev\\\\server\\\\chunks\\\\ssr\\\\node_modules_@firebase_auth_dist_node-esm_1_8sm_p._.js\" -Pattern \"AIzaSy\" | ForEach-Object { $_.Line } | Select-Object -First 1 | ForEach-Object { $_.Substring\\(0, [Math]::Min\\(200, $_.Length\\)\\) })"
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\\\\.next\\\\dev\\\\server\\\\chunks\\\\ssr\\\\node_modules_@firebase_auth_dist_node-esm_1_8sm_p._.js\" -Pattern \"AIzaSy\" | ForEach-Object { $_.Line } | Select-Object -First 1 | ForEach-Object { $_.Substring\\(0, [Math]::Min\\(200, $_.Length\\)\\) })",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\" -Depth 2 | Select-Object -Property Name, FullName | Where-Object { $_.Name -ne '.next' -and $_.Name -ne 'node_modules' -and $_.Name -ne '.claude' } | Sort-Object FullName | ForEach-Object { Write-Output $_.FullName })",
+      "PowerShell(head *)",
+      "Bash(node -e \"const p = require\\('./node_modules/@zxing/browser/package.json'\\); console.log\\('browser:', p.version\\); const l = require\\('./node_modules/@zxing/library/package.json'\\); console.log\\('library:', l.version\\); const t = require\\('./node_modules/tesseract.js/package.json'\\); console.log\\('tesseract:', t.version\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('./node_modules/@zxing/browser/esm/BrowserCodeReader.js', 'utf8'\\); const lines = src.split\\('\\\\n'\\); const idx = lines.findIndex\\(l => l.includes\\('decodeFromVideoElement'\\)\\); console.log\\(lines.slice\\(idx, idx+15\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const src = require\\('fs'\\).readFileSync\\('./node_modules/@zxing/browser/esm/common/BrowserCodeReader.js','utf8'\\); const lines = src.split\\('\\\\n'\\); const idx = lines.findIndex\\(l => l.includes\\('decodeFromVideoElement'\\)\\); console.log\\(lines.slice\\(idx, idx+20\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const src = require\\('fs'\\).readFileSync\\('./node_modules/@zxing/browser/esm/index.d.ts','utf8'\\); console.log\\(src.slice\\(0,3000\\)\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('./node_modules/@zxing/browser/esm/index.js','utf8'\\); const lines = src.split\\('\\\\n'\\); const idx = lines.findIndex\\(l => l.includes\\('decodeFromCanvas'\\)\\); console.log\\(lines.slice\\(idx, idx+15\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('./node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js','utf8'\\).slice\\(0, 5000\\); console.log\\(src\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('./node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js','utf8'\\); const idx = src.indexOf\\('decodeFromCanvas'\\); console.log\\(src.slice\\(idx, idx+400\\)\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('./node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js','utf8'\\); const idx = src.indexOf\\('BrowserCodeReader.prototype.decodeFromCanvas'\\); console.log\\(src.slice\\(idx, idx+300\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(Get-ChildItem *)",
+      "Bash(npx next *)",
+      "Bash(Get-Content package.json)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\" -Recurse -File | Where-Object { $_.FullName -notmatch \"node_modules|\\\\.next|\\\\.git\" } | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\(\"C:\\\\Users\\\\Alejandro\\\\Desktop\\\\Scan\\\\\", \"\"\\) } | Sort-Object)"
     ]
   }
 }
