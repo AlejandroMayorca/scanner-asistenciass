@@ -14,13 +14,13 @@ function capitalize(s: string): string {
   return s.toLowerCase().replace(/\b[a-záéíóúñ]/gi, c => c.toUpperCase())
 }
 
-function calcEdad(fechaNacimiento: string): number {
-  if (!fechaNacimiento) return 0
-  const [y, m, d] = fechaNacimiento.split('-').map(Number)
+function calcEdad(fn: string): number {
+  if (!fn) return 0
+  const [y, m, d] = fn.split('-').map(Number)
   const hoy = new Date()
-  let edad = hoy.getFullYear() - y
-  if (hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) edad--
-  return Math.max(0, edad)
+  let e = hoy.getFullYear() - y
+  if (hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) e--
+  return Math.max(0, e)
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -47,9 +47,7 @@ interface ConfirmForm {
   rawText?: string
 }
 
-type ToastState = { color: 'red' | 'yellow' | 'green'; msg: string } | null
-
-// ─── PDF417 parsers (cédula vieja) ───────────────────────────────────────────
+// ─── PDF417 parsers ───────────────────────────────────────────────────────────
 
 function cleanName(s: string): string {
   return capitalize(s.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ\s]/g, '').trim())
@@ -164,30 +162,25 @@ function parsePdf417Legacy(raw: string): Cedula | null {
   return null
 }
 
-// ─── MRZ parser (cédula nueva) ────────────────────────────────────────────────
+// ─── MRZ parser ───────────────────────────────────────────────────────────────
 
 function cleanMrzName(s: string): string {
   return capitalize(s.replace(/<+/g, ' ').replace(/[^A-Za-z\s]/g, '').trim())
 }
 
-// Corrige errores típicos de OCR en líneas numéricas MRZ: O→0, I→1
 function correctMrzOcr(text: string): string {
   return text.split('\n').map(line => {
     const t = line.trim()
-    // Solo corregir en líneas que parecen datos MRZ (muchos dígitos/< y sin espacios interiores)
-    if (t.length >= 20 && /[0-9<]{10,}/.test(t) && !/ {2,}/.test(t)) {
+    if (t.length >= 20 && /[0-9<]{10,}/.test(t) && !/ {2,}/.test(t))
       return t.replace(/O/g, '0').replace(/I/g, '1')
-    }
     return line
   }).join('\n')
 }
 
 function parseMrzLines(_l1: string, l2: string, l3: string): Cedula | null {
-  // Corregir OCR en l2 (línea numérica: fechas + COL + cédula)
   const l2c = l2.replace(/O/g, '0').replace(/I/g, '1')
   const colIdx = l2c.indexOf('COL')
   if (colIdx < 0) return null
-  // Cédula: dígitos después de COL hasta el primer no-dígito
   const cedula = l2c.slice(colIdx + 3).match(/^(\d{5,12})/)?.[1] ?? ''
   if (cedula.length < 5) return null
   const yy = parseInt(l2c.slice(0, 2))
@@ -262,705 +255,498 @@ export function debugPdf417Positions(raw: string): string {
   ].join(' | ')
 }
 
-function parseBarcode(raw: string): Cedula | null {
-  if (!raw || raw.length < 5) return null
-  const up = raw.toUpperCase()
-  if (up.includes('ICCOL') || up.includes('IDCOL') || raw.includes('<<')) {
-    return parseMrzText(raw) ?? parseMrzRegex(raw)
-  }
-  return parsePdf417Binario(raw) ?? parsePdf417NullSplit(raw) ?? parsePdf417Legacy(raw)
-}
-
 // ─── Component ────────────────────────────────────────────────────────────────
+
+const FIELD = 'w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition'
 
 export default function ScannerPage() {
   const { id: eventoId } = useParams<{ id: string }>()
   const router = useRouter()
 
-  // Camera
-  const videoRef   = useRef<HTMLVideoElement>(null)
-  const streamRef  = useRef<MediaStream | null>(null)
-  const inputRef   = useRef<HTMLInputElement>(null)
-
-  // OCR
+  const videoRef  = useRef<HTMLVideoElement>(null)
+  const inputRef  = useRef<HTMLInputElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tWorkerRef  = useRef<any>(null)
-  const tReadyRef   = useRef(false)
+  const workerRef  = useRef<any>(null)
+  const workerReady = useRef(false)
   const toastTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // UI state
-  const [cameraReady,   setCameraReady]   = useState(false)
-  const [cameraError,   setCameraError]   = useState(false)
-  const [flashAvail,    setFlashAvail]    = useState(false)
-  const [flashOn,       setFlashOn]       = useState(false)
-  const [tooDark,       setTooDark]       = useState(false)
-  const [scanState,     setScanState]     = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
-  const [processing,    setProcessing]    = useState(false)
-  const [ocrFailCount,  setOcrFailCount]  = useState(0)
+  const [cameraOn,    setCameraOn]    = useState(false)
+  const [flashAvail,  setFlashAvail]  = useState(false)
+  const [flashOn,     setFlashOn]     = useState(false)
+  const [processing,  setProcessing]  = useState(false)
+  const [scanState,   setScanState]   = useState<'idle' | 'ok' | 'fail'>('idle')
+  const [tooDark,     setTooDark]     = useState(false)
+  const [ocrFails,    setOcrFails]    = useState(0)
+  const [tReady,      setTReady]      = useState(false)
 
-  // App state
-  const [toast,         setToast]         = useState<ToastState>(null)
+  const [toast,         setToast]         = useState<{ color: string; msg: string } | null>(null)
   const [confirmForm,   setConfirmForm]   = useState<ConfirmForm | null>(null)
   const [confirmSaving, setConfirmSaving] = useState(false)
   const [confirmError,  setConfirmError]  = useState('')
   const [total,         setTotal]         = useState(0)
   const [evento,        setEvento]        = useState<Evento | null>(null)
   const [showManual,    setShowManual]    = useState(false)
-  const [manualForm,    setManualForm]    = useState({
-    cedula: '', nombres: '', apellidos: '',
-    fechaNacimiento: '', sexo: '' as 'M' | 'F' | '', rh: '',
-  })
-  const [manualSaving, setManualSaving] = useState(false)
-  const [manualError,  setManualError]  = useState('')
-  const [debugLog,     setDebugLog]     = useState<string[]>([])
-  const [tReady,       setTReady]       = useState(false)
+  const [manualForm,    setManualForm]    = useState({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '' as 'M'|'F'|'', rh: '' })
+  const [manualSaving,  setManualSaving]  = useState(false)
+  const [manualError,   setManualError]   = useState('')
+  const [log,           setLog]           = useState<string[]>([])
 
-  // ── Debug ──────────────────────────────────────────────────────────────────
+  const addLog = useCallback((m: string) => { console.log(m); setLog(p => [...p.slice(-7), m]) }, [])
 
-  const addLog = useCallback((msg: string) => {
-    console.log(msg)
-    setDebugLog(prev => [...prev.slice(-9), msg])
-  }, [])
-
-  // ── Camera init ────────────────────────────────────────────────────────────
-
+  // ── Camera preview ─────────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
-    const init = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        })
+    navigator.mediaDevices?.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      .then(stream => {
         if (!alive) { stream.getTracks().forEach(t => t.stop()); return }
         streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          await videoRef.current.play().catch(() => {})
-        }
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(() => {}) }
         const track = stream.getVideoTracks()[0]
-        const caps  = track.getCapabilities?.() as Record<string, unknown> | undefined
+        const caps = track.getCapabilities?.() as Record<string, unknown> | undefined
         if (caps && 'torch' in caps) setFlashAvail(true)
-        setCameraReady(true)
-      } catch {
-        setCameraError(true)
-      }
-    }
-    init()
-    return () => {
-      alive = false
-      streamRef.current?.getTracks().forEach(t => t.stop())
-    }
+        setCameraOn(true)
+      })
+      .catch(() => {/* preview not available — still works via file input */})
+    return () => { alive = false; streamRef.current?.getTracks().forEach(t => t.stop()) }
   }, [])
 
-  // ── Ambient light check ────────────────────────────────────────────────────
-
+  // ── Light check ────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!cameraReady) return
-    const canvas = document.createElement('canvas')
-    canvas.width = 50; canvas.height = 50
-    const ctx = canvas.getContext('2d')!
-    const check = () => {
+    if (!cameraOn) return
+    const cv = document.createElement('canvas'); cv.width = 50; cv.height = 50
+    const cx = cv.getContext('2d')!
+    const id = setInterval(() => {
       const v = videoRef.current
       if (!v || v.readyState < 2) return
-      ctx.drawImage(v, 0, 0, 50, 50)
-      const d = ctx.getImageData(0, 0, 50, 50).data
-      let sum = 0
-      for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114
-      setTooDark(sum / (50 * 50) < 35)
-    }
-    const id = setInterval(check, 1800)
+      cx.drawImage(v, 0, 0, 50, 50)
+      const d = cx.getImageData(0, 0, 50, 50).data
+      let s = 0
+      for (let i = 0; i < d.length; i += 4) s += d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114
+      setTooDark(s / 2500 < 35)
+    }, 1800)
     return () => clearInterval(id)
-  }, [cameraReady])
+  }, [cameraOn])
 
-  // ── Tesseract init ─────────────────────────────────────────────────────────
-
+  // ── Tesseract ──────────────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
-    const init = async () => {
+    ;(async () => {
       try {
         const { createWorker, PSM } = await import('tesseract.js')
-        const worker = await createWorker('eng', 1, { logger: () => {} })
-        await worker.setParameters({
-          tessedit_pageseg_mode:   PSM.SINGLE_BLOCK,
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
-        })
-        if (!alive) { await worker.terminate(); return }
-        tWorkerRef.current = worker
-        tReadyRef.current  = true
-        setTReady(true)
-      } catch { /* OCR no disponible */ }
-    }
-    init()
-    return () => {
-      alive = false
-      tWorkerRef.current?.terminate?.()
-      if (toastTimer.current) clearTimeout(toastTimer.current)
-    }
+        const w = await createWorker('eng', 1, { logger: () => {} })
+        await w.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK, tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<' })
+        if (!alive) { await w.terminate(); return }
+        workerRef.current = w; workerReady.current = true; setTReady(true)
+      } catch { /* unavailable */ }
+    })()
+    return () => { alive = false; workerRef.current?.terminate?.(); if (toastTimer.current) clearTimeout(toastTimer.current) }
   }, [])
 
-  // ── Realtime counter ───────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!eventoId) return
-    return onSnapshot(collection(db, 'eventos', eventoId, 'asistencias'), s => setTotal(s.size))
-  }, [eventoId])
-
-  useEffect(() => {
-    if (!eventoId) return
-    getDoc(doc(db, 'eventos', eventoId)).then(s => {
-      if (s.exists()) setEvento({ id: s.id, ...s.data() } as Evento)
-    })
-  }, [eventoId])
+  // ── Firebase ───────────────────────────────────────────────────────────────
+  useEffect(() => { if (!eventoId) return; return onSnapshot(collection(db, 'eventos', eventoId, 'asistencias'), s => setTotal(s.size)) }, [eventoId])
+  useEffect(() => { if (!eventoId) return; getDoc(doc(db, 'eventos', eventoId)).then(s => { if (s.exists()) setEvento({ id: s.id, ...s.data() } as Evento) }) }, [eventoId])
 
   // ── Toast ──────────────────────────────────────────────────────────────────
-
-  const showToast = useCallback((color: 'red' | 'yellow' | 'green', msg: string) => {
+  const showToast = useCallback((color: string, msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current)
     setToast({ color, msg })
     toastTimer.current = setTimeout(() => setToast(null), 3200)
   }, [])
 
-  // ── Flash toggle ───────────────────────────────────────────────────────────
-
+  // ── Flash ──────────────────────────────────────────────────────────────────
   const toggleFlash = useCallback(async () => {
     const track = streamRef.current?.getVideoTracks()[0]
     if (!track) return
-    try {
-      const next = !flashOn
-      await track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] })
-      setFlashOn(next)
-    } catch { /* torch not supported */ }
+    try { const n = !flashOn; await track.applyConstraints({ advanced: [{ torch: n } as MediaTrackConstraintSet] }); setFlashOn(n) } catch { /* unsupported */ }
   }, [flashOn])
 
-  // ── Core capture + process ─────────────────────────────────────────────────
-
-  const processImage = useCallback(async (imgEl: HTMLImageElement | HTMLCanvasElement, W: number, H: number) => {
-    const MAX = 2000
-    const scale = Math.min(1, MAX / Math.max(W, H))
-    const cW = Math.round(W * scale), cH = Math.round(H * scale)
-    const canvas = document.createElement('canvas')
-    canvas.width = cW; canvas.height = cH
-    canvas.getContext('2d')!.drawImage(imgEl, 0, 0, cW, cH)
-
-    const base64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1]
-    addLog(`[foto] ${W}×${H} → ${cW}×${cH} | ${Math.round(base64.length / 1024)}kb`)
-
-    let detected: Cedula | null = null
-    let rawServerText: string | undefined
-
+  // ── Process image ──────────────────────────────────────────────────────────
+  const processImage = useCallback(async (file: File) => {
+    setProcessing(true); setScanState('idle'); setLog([])
     try {
-      addLog('[api] enviando…')
-      const resp = await fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64 }),
-      })
-      const data = await resp.json() as {
-        success: boolean; text?: string
-        parsed?: { cedula: string; apellido1: string; apellido2: string; nombre1: string; nombre2: string; sexo: string; anioNac: string; mesNac: string; diaNac: string; rh: string }
-        error?: string; logs?: string[]
-      }
-      for (const line of data.logs ?? []) addLog(line)
+      const url = URL.createObjectURL(file)
+      const img = new Image(); img.src = url
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error('img')) })
+      URL.revokeObjectURL(url)
 
-      if (data.success && data.text) {
-        rawServerText = data.text
-        if (data.parsed?.cedula) {
-          const p = data.parsed
-          detected = {
-            cedula:    p.cedula,
-            nombres:   cleanName([p.nombre1, p.nombre2].filter(Boolean).join(' ')),
-            apellidos: cleanName([p.apellido1, p.apellido2].filter(Boolean).join(' ')),
-            sexo:      p.sexo === 'M' || p.sexo === 'F' ? p.sexo as 'M' | 'F' : undefined,
-            rh:        p.rh || undefined,
-            modo:      'PDF417',
-            ...buildFecha(p.anioNac, p.mesNac, p.diaNac) ?? {},
+      const MAX = 2000, scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight))
+      const cW = Math.round(img.naturalWidth * scale), cH = Math.round(img.naturalHeight * scale)
+      const canvas = document.createElement('canvas'); canvas.width = cW; canvas.height = cH
+      canvas.getContext('2d')!.drawImage(img, 0, 0, cW, cH)
+      const base64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1]
+      addLog(`foto ${img.naturalWidth}×${img.naturalHeight} → ${cW}×${cH}`)
+
+      let detected: Cedula | null = null
+      let rawText: string | undefined
+
+      // ── API ──────────────────────────────────────────────────────────────
+      try {
+        const res = await fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: base64 }) })
+        const data = await res.json() as { success: boolean; text?: string; parsed?: { cedula: string; apellido1: string; apellido2: string; nombre1: string; nombre2: string; sexo: string; anioNac: string; mesNac: string; diaNac: string; rh: string }; error?: string; logs?: string[] }
+        for (const l of data.logs ?? []) addLog(l)
+        if (data.success && data.text) {
+          rawText = data.text
+          if (data.parsed?.cedula) {
+            const p = data.parsed
+            detected = {
+              cedula:    p.cedula,
+              nombres:   cleanName([p.nombre1, p.nombre2].filter(Boolean).join(' ')),
+              apellidos: cleanName([p.apellido1, p.apellido2].filter(Boolean).join(' ')),
+              sexo:      p.sexo === 'M' || p.sexo === 'F' ? p.sexo as 'M'|'F' : undefined,
+              rh:        p.rh || undefined,
+              modo:      'PDF417',
+              ...buildFecha(p.anioNac, p.mesNac, p.diaNac) ?? {},
+            }
+            addLog(`✓ PDF417 srv: ${p.cedula} ${p.apellido1}`)
+          } else {
+            addLog(`txt: ${data.text.replace(/\x00/g, '□').slice(0, 80)}`)
+            addLog(debugPdf417Positions(data.text))
+            const r1 = parsePdf417Binario(data.text)
+            const r2 = r1 ? null : parsePdf417NullSplit(data.text)
+            const r3 = (r1||r2) ? null : parsePdf417Legacy(data.text)
+            detected = r1 ?? r2 ?? r3 ?? parseMrzText(data.text) ?? parseMrzRegex(data.text)
+            addLog(`parse: bin=${r1?'✓':'✗'} null=${r2?'✓':'✗'} leg=${r3?'✓':'✗'} → ${detected?detected.cedula:'nada'}`)
           }
-          addLog(`[srv✓] ${detected.apellidos} | ${p.cedula}`)
-        } else {
-          addLog(`[txt] ${data.text.replace(/\x00/g, '□')}`)
-          addLog(`[pos] ${debugPdf417Positions(data.text)}`)
-          const r1 = parsePdf417Binario(data.text)
-          const r2 = r1 ? null : parsePdf417NullSplit(data.text)
-          const r3 = (r1 || r2) ? null : parsePdf417Legacy(data.text)
-          detected = r1 ?? r2 ?? r3 ?? parseMrzText(data.text) ?? parseMrzRegex(data.text)
-          addLog(`[parse] bin=${r1?'✓':'✗'} null=${r2?'✓':'✗'} leg=${r3?'✓':'✗'} → ${detected ? `cedula=${detected.cedula}` : 'nada'}`)
-        }
-      } else {
-        addLog(`[api] sin detección: ${data.error ?? ''}`)
-      }
-    } catch (err) {
-      addLog(`[api] error: ${String(err).slice(0, 80)}`)
-    }
+        } else { addLog(`api fail: ${data.error ?? ''}`) }
+      } catch (e) { addLog(`api err: ${String(e).slice(0, 60)}`) }
 
-    // ── Tesseract MRZ fallback ──────────────────────────────────────────────
-    if (!detected) {
-      if (tReadyRef.current && tWorkerRef.current) {
+      // ── Tesseract fallback ────────────────────────────────────────────────
+      if (!detected && workerReady.current && workerRef.current) {
         try {
-          const sy = Math.floor(cH * 0.50), sh = Math.floor(cH * 0.50)
-          const ct = document.createElement('canvas')
-          ct.width = cW; ct.height = sh
+          const sy = Math.floor(cH * 0.5), sh = Math.floor(cH * 0.5)
+          const ct = document.createElement('canvas'); ct.width = cW; ct.height = sh
           const cx = ct.getContext('2d')!
-          // Alto contraste para mejorar lectura MRZ
           cx.filter = 'contrast(2.5) brightness(1.3) grayscale(1)'
           cx.drawImage(canvas, 0, sy, cW, sh, 0, 0, cW, sh)
           cx.filter = 'none'
-          const { data: { text } } = await tWorkerRef.current.recognize(ct)
-          addLog(`[ocr] ${text.trim()}`)
+          const { data: { text } } = await workerRef.current.recognize(ct)
+          addLog(`ocr: ${text.trim().slice(0, 60)}`)
           detected = parseMrzText(text) ?? parseMrzRegex(text)
-          if (detected) {
-            addLog(`[ocr✓] ${detected.modo} cedula=${detected.cedula}`)
-            setOcrFailCount(0)
-          } else {
-            const newFails = ocrFailCount + 1
-            setOcrFailCount(newFails)
-            addLog(`[ocr] fallo ${newFails}/2`)
-            // Después de 2 fallos: abrir modal con lo que tenemos del OCR
-            if (newFails >= 2) {
-              const partialCedula = text.match(/\d{6,12}/)?.[0] ?? ''
-              setOcrFailCount(0)
-              setScanState('error')
-              setTimeout(() => setScanState('idle'), 800)
-              setProcessing(false)
-              setConfirmForm({
-                cedula: partialCedula, nombres: '', apellidos: '',
-                sexo: '', fechaNacimiento: '', rh: '', modo: 'MRZ',
-                rawText: text.trim().slice(0, 300),
-              })
+          if (detected) { addLog(`✓ OCR: ${detected.cedula}`); setOcrFails(0) }
+          else {
+            const nf = ocrFails + 1; setOcrFails(nf)
+            addLog(`ocr fail ${nf}/2`)
+            if (nf >= 2) {
+              setOcrFails(0); setScanState('fail'); setProcessing(false)
+              setConfirmForm({ cedula: text.match(/\d{6,12}/)?.[0] ?? '', nombres: '', apellidos: '', sexo: '', fechaNacimiento: '', rh: '', modo: 'MRZ', rawText: text.trim().slice(0, 300) })
               return
             }
           }
-        } catch (err) {
-          addLog(`[ocr] error: ${String(err).slice(0, 60)}`)
+        } catch (e) { addLog(`ocr err: ${String(e).slice(0, 50)}`) }
+      }
+
+      // ── Result ────────────────────────────────────────────────────────────
+      if (!detected || detected.cedula.length < 5) {
+        setScanState('fail')
+        if (rawText) {
+          setConfirmForm({ cedula: rawText.match(/\d{6,12}/)?.[0] ?? '', nombres: '', apellidos: '', sexo: '', fechaNacimiento: '', rh: '', modo: 'PDF417', rawText: rawText.replace(/\x00/g, '').slice(0, 200) })
+        } else {
+          showToast('#ef4444', '❌ No se detectó. Intenta de nuevo')
         }
-      } else {
-        addLog(`[ocr] ${tReady ? 'ocupado' : 'iniciando…'}`)
+        setProcessing(false); return
       }
-    }
 
-    // ── Result ──────────────────────────────────────────────────────────────
-    if (!detected || detected.cedula.length < 5) {
-      if (!rawServerText) {
-        setScanState('error')
-        setTimeout(() => setScanState('idle'), 800)
-        showToast('red', '❌ No se detectó. Intenta de nuevo')
-      } else {
-        // Hay texto raw pero no se parseó: abrir modal para completar
-        const rawCedula = rawServerText.match(/\d{6,12}/)?.[0] ?? ''
-        setScanState('error')
-        setTimeout(() => setScanState('idle'), 800)
-        setConfirmForm({
-          cedula: rawCedula, nombres: '', apellidos: '',
-          sexo: '', fechaNacimiento: '', rh: '', modo: 'PDF417',
-          rawText: rawServerText.replace(/\x00/g, '').slice(0, 200),
-        })
-      }
+      const dup = await checkDuplicado(eventoId, detected.cedula)
+      if (dup) { setScanState('fail'); showToast('#f59e0b', `⚠️ Ya registrado: ${detected.apellidos}`); setProcessing(false); return }
+
+      setScanState('ok')
+      setConfirmForm({ cedula: detected.cedula, nombres: detected.nombres, apellidos: detected.apellidos, sexo: detected.sexo ?? '', fechaNacimiento: detected.fechaNacimiento ?? '', rh: detected.rh ?? '', modo: detected.modo })
       setProcessing(false)
-      return
+    } catch (e) {
+      addLog(`fatal: ${String(e).slice(0, 80)}`); setScanState('fail'); showToast('#ef4444', '❌ Error procesando imagen'); setProcessing(false)
     }
+  }, [eventoId, showToast, addLog, ocrFails])
 
-    const dup = await checkDuplicado(eventoId, detected.cedula)
-    if (dup) {
-      setScanState('error')
-      setTimeout(() => setScanState('idle'), 800)
-      showToast('yellow', `⚠️ Ya registrado: ${detected.apellidos} ${detected.nombres}`)
-      setProcessing(false)
-      return
-    }
-
-    setScanState('success')
-    setTimeout(() => setScanState('idle'), 1200)
-    setConfirmForm({
-      cedula:          detected.cedula,
-      nombres:         detected.nombres,
-      apellidos:       detected.apellidos,
-      sexo:            detected.sexo ?? '',
-      fechaNacimiento: detected.fechaNacimiento ?? '',
-      rh:              detected.rh ?? '',
-      modo:            detected.modo,
-    })
-    setProcessing(false)
-  }, [eventoId, showToast, addLog, ocrFailCount, tReady])
-
-  // ── Capture from live camera ───────────────────────────────────────────────
-
-  const handleCapture = useCallback(async () => {
-    if (processing || !cameraReady || !videoRef.current) return
-    const v = videoRef.current
-    if (!v.videoWidth) return
-    setProcessing(true)
-    setScanState('processing')
-    setDebugLog([])
-    await processImage(v, v.videoWidth, v.videoHeight)
-  }, [processing, cameraReady, processImage])
-
-  // ── Capture from file input (iOS fallback) ─────────────────────────────────
-
-  const handleFileCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = ''
-    setProcessing(true)
-    setScanState('processing')
-    setDebugLog([])
-    const url = URL.createObjectURL(file)
-    const img  = new Image()
-    img.src = url
-    await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej() })
-    URL.revokeObjectURL(url)
-    await processImage(img, img.naturalWidth, img.naturalHeight)
+  // ── File input change ──────────────────────────────────────────────────────
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return; e.target.value = ''; await processImage(file)
   }, [processImage])
 
-  // ── Confirm save ───────────────────────────────────────────────────────────
+  // ── Capture button ─────────────────────────────────────────────────────────
+  const handleCapture = useCallback(() => {
+    if (processing) return; setScanState('idle'); inputRef.current?.click()
+  }, [processing])
 
+  // ── Confirm save ───────────────────────────────────────────────────────────
   const handleConfirm = async () => {
-    if (!confirmForm) return
-    setConfirmSaving(true); setConfirmError('')
+    if (!confirmForm) return; setConfirmSaving(true); setConfirmError('')
     try {
       const edad = confirmForm.fechaNacimiento ? calcEdad(confirmForm.fechaNacimiento) : 0
-      await registrarAsistencia(eventoId, {
-        cedula: confirmForm.cedula, nombres: confirmForm.nombres, apellidos: confirmForm.apellidos,
-        fechaNacimiento: confirmForm.fechaNacimiento, edad,
-        sexo: (confirmForm.sexo || undefined) as 'M' | 'F' | undefined,
-        rh: confirmForm.rh, modo: confirmForm.modo,
-      })
-      showToast('green', `✅ ${confirmForm.apellidos} ${confirmForm.nombres}`)
-      setConfirmForm(null); setDebugLog([])
-    } catch (err: unknown) {
-      setConfirmError((err as { message?: string }).message ?? 'Error al guardar')
-    } finally {
-      setConfirmSaving(false)
-    }
+      await registrarAsistencia(eventoId, { cedula: confirmForm.cedula, nombres: confirmForm.nombres, apellidos: confirmForm.apellidos, fechaNacimiento: confirmForm.fechaNacimiento, edad, sexo: (confirmForm.sexo || undefined) as 'M'|'F'|undefined, rh: confirmForm.rh, modo: confirmForm.modo })
+      showToast('#22c55e', `✅ ${confirmForm.apellidos} ${confirmForm.nombres}`)
+      setConfirmForm(null); setLog([])
+    } catch (e: unknown) { setConfirmError((e as { message?: string }).message ?? 'Error al guardar') }
+    finally { setConfirmSaving(false) }
   }
 
-  // ── Manual registration ────────────────────────────────────────────────────
-
+  // ── Manual save ────────────────────────────────────────────────────────────
   const handleManual = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const { cedula, nombres, apellidos, fechaNacimiento, sexo, rh } = manualForm
+    e.preventDefault(); const { cedula, nombres, apellidos, fechaNacimiento, sexo, rh } = manualForm
     if (!cedula || !nombres || !apellidos || !fechaNacimiento || !sexo) return
     setManualSaving(true); setManualError('')
     try {
-      const dup = await checkDuplicado(eventoId, cedula.trim())
-      if (dup) { setManualError('Esta cédula ya está registrada'); return }
-      await registrarAsistencia(eventoId, {
-        cedula: cedula.trim(), nombres: capitalize(nombres.trim()), apellidos: capitalize(apellidos.trim()),
-        fechaNacimiento, edad: calcEdad(fechaNacimiento),
-        sexo: sexo as 'M' | 'F', rh: rh.trim(), modo: 'MANUAL',
-      })
-      showToast('green', `✅ ${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`)
-      setShowManual(false)
-      setManualForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
-    } catch (err: unknown) {
-      setManualError((err as { message?: string }).message ?? 'Error al guardar')
-    } finally {
-      setManualSaving(false)
-    }
+      if (await checkDuplicado(eventoId, cedula.trim())) { setManualError('Cédula ya registrada'); return }
+      await registrarAsistencia(eventoId, { cedula: cedula.trim(), nombres: capitalize(nombres.trim()), apellidos: capitalize(apellidos.trim()), fechaNacimiento, edad: calcEdad(fechaNacimiento), sexo: sexo as 'M'|'F', rh: rh.trim(), modo: 'MANUAL' })
+      showToast('#22c55e', `✅ ${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`)
+      setShowManual(false); setManualForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
+    } catch (e: unknown) { setManualError((e as { message?: string }).message ?? 'Error') }
+    finally { setManualSaving(false) }
   }
 
-  // ── Corner color ───────────────────────────────────────────────────────────
-
-  const cornerColor = scanState === 'success' ? '#4ade80' : scanState === 'error' ? '#f87171' : '#22c55e'
-  const cornerGlow  = scanState === 'success' ? '#4ade8066' : scanState === 'error' ? '#f8717166' : '#22c55e55'
-
-  const FIELD = 'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
+  const frameColor = scanState === 'ok' ? '#4ade80' : scanState === 'fail' ? '#f87171' : '#22c55e'
 
   // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
-    <div className="fixed inset-0 bg-black z-50 overflow-hidden flex flex-col select-none">
+    <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 50, overflow: 'hidden', display: 'flex', flexDirection: 'column', userSelect: 'none' }}>
 
-      {/* CSS keyframe animations */}
       <style>{`
-        @keyframes scanLine {
-          0%   { transform: translateY(0%); opacity: 1; }
-          85%  { opacity: 1; }
-          100% { transform: translateY(calc(100% - 2px)); opacity: 0; }
+        @keyframes scan {
+          0%   { transform: translateY(0px); opacity: 1; }
+          90%  { opacity: 1; }
+          100% { transform: translateY(280px); opacity: 0; }
         }
-        @keyframes cornerPulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.55; }
+        @keyframes corner-pulse {
+          0%   { opacity: 0.7; }
+          100% { opacity: 1; }
         }
-        @keyframes processSweep {
+        @keyframes sweep {
           0%   { transform: translateY(-100%); }
-          100% { transform: translateY(100%); }
+          100% { transform: translateY(200%); }
         }
-        @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+        @keyframes fadein {
+          from { opacity: 0; transform: translateY(16px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideup {
+          from { transform: translateY(100%); }
+          to   { transform: translateY(0); }
+        }
+        .scan-line { animation: scan 2s linear infinite; }
+        .corner    { animation: corner-pulse 1s ease-in-out infinite alternate; }
+        .sweep     { animation: sweep 1.4s ease-in-out infinite; }
+        .fadein    { animation: fadein 0.25s ease; }
+        .slideup   { animation: slideup 0.28s cubic-bezier(0.32,0.72,0,1); }
       `}</style>
 
-      {/* ── File input fallback (hidden) ──────────────────────────────────── */}
+      {/* ── Hidden file input ──────────────────────────────────────────── */}
       <input ref={inputRef} type="file" accept="image/*" capture="environment"
-        style={{ display: 'none' }} onChange={handleFileCapture} />
+        style={{ display: 'none' }} onChange={handleFileChange} />
 
-      {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-3 px-4 pt-10 pb-4"
-        style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
+      {/* ── Video preview ─────────────────────────────────────────────── */}
+      <video ref={videoRef} autoPlay playsInline muted
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: cameraOn ? 1 : 0 }} />
+
+      {/* ── Background when no camera ─────────────────────────────────── */}
+      {!cameraOn && (
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at center, #0a0a0a 0%, #000 100%)' }}>
+          <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+        </div>
+      )}
+
+      {/* ── Top bar ───────────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, background: 'linear-gradient(to bottom, rgba(0,0,0,0.88) 0%, transparent 100%)', padding: '44px 16px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <button onClick={() => router.back()}
-          className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center text-white text-xl shrink-0">
+          style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', fontSize: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           ‹
         </button>
-        <div className="min-w-0 flex-1">
-          <p className="text-white font-semibold text-sm leading-tight truncate">{evento?.nombre ?? '…'}</p>
-          <p className="text-emerald-400 font-bold text-base">{total} asistente{total !== 1 ? 's' : ''}</p>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ color: '#fff', fontWeight: 600, fontSize: 14, margin: 0, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{evento?.nombre ?? '…'}</p>
+          <p style={{ color: '#4ade80', fontWeight: 700, fontSize: 15, margin: 0 }}>{total} asistente{total !== 1 ? 's' : ''}</p>
         </div>
-        {/* OCR status pill */}
-        <div className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${tReady ? 'bg-emerald-900/50 text-emerald-400' : 'bg-zinc-800 text-zinc-500'}`}>
+        <div style={{ fontSize: 10, padding: '3px 8px', borderRadius: 20, fontWeight: 700, background: tReady ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.08)', color: tReady ? '#4ade80' : '#71717a' }}>
           OCR {tReady ? '✓' : '…'}
         </div>
       </div>
 
-      {/* ── Camera or no-camera background ───────────────────────────────── */}
-      {!cameraError ? (
-        <video ref={videoRef} autoPlay playsInline muted
-          className="absolute inset-0 w-full h-full object-cover" />
-      ) : (
-        <div className="absolute inset-0 bg-zinc-900 flex items-center justify-center">
-          <p className="text-zinc-500 text-sm">Cámara no disponible</p>
-        </div>
-      )}
+      {/* ── Scanner frame ─────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 90, paddingBottom: 190 }}>
 
-      {/* ── Scanner frame ─────────────────────────────────────────────────── */}
-      <div className="absolute inset-0 flex items-center justify-center"
-        style={{ paddingTop: '80px', paddingBottom: '160px' }}>
+        {/* outer dark mask */}
+        <div style={{ position: 'relative', width: '88%', maxWidth: 380, aspectRatio: '85/54' }}>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 100vmax rgba(0,0,0,0.58)' }} />
 
-        <div className="relative" style={{ width: '88%', aspectRatio: '85/54' }}>
-
-          {/* Dark vignette outside frame */}
-          <div className="absolute inset-0 rounded-lg pointer-events-none"
-            style={{ boxShadow: '0 0 0 100vmax rgba(0,0,0,0.52)' }} />
-
-          {/* Scan line (only when idle) */}
-          {scanState === 'idle' && (
-            <div className="absolute inset-0 overflow-hidden rounded-lg">
-              <div style={{
-                position: 'absolute', left: '4%', right: '4%', height: '2px',
-                background: 'linear-gradient(90deg, transparent 0%, #ef4444 30%, #ff6b6b 50%, #ef4444 70%, transparent 100%)',
-                boxShadow: '0 0 8px 2px #ef444488',
-                animation: 'scanLine 2.2s ease-in-out infinite',
-                top: 0,
-              }} />
+          {/* scan line */}
+          {!processing && (
+            <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: 8 }}>
+              <div className="scan-line" style={{ position: 'absolute', left: '6%', right: '6%', height: 2, top: 0, background: 'linear-gradient(90deg, transparent, #ef4444 25%, #ff5555 50%, #ef4444 75%, transparent)', boxShadow: '0 0 10px 3px rgba(239,68,68,0.6)' }} />
             </div>
           )}
 
-          {/* Processing sweep overlay */}
-          {scanState === 'processing' && (
-            <div className="absolute inset-0 rounded-lg overflow-hidden flex items-center justify-center"
-              style={{ background: 'rgba(0,0,0,0.5)' }}>
-              <div style={{
-                position: 'absolute', left: 0, right: 0, height: '60%',
-                background: 'linear-gradient(180deg, transparent, rgba(34,197,94,0.15), transparent)',
-                animation: 'processSweep 1s ease-in-out infinite',
-              }} />
-              <div className="relative z-10 text-center">
-                <div className="w-10 h-10 border-[3px] border-emerald-500/30 border-t-emerald-400 rounded-full animate-spin mx-auto mb-3" />
-                <p className="text-emerald-300 text-sm font-semibold tracking-wide">Leyendo cédula…</p>
-              </div>
+          {/* processing overlay */}
+          {processing && (
+            <div style={{ position: 'absolute', inset: 0, borderRadius: 8, background: 'rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, overflow: 'hidden' }}>
+              <div className="sweep" style={{ position: 'absolute', left: 0, right: 0, height: '50%', background: 'linear-gradient(180deg, transparent, rgba(34,197,94,0.12), transparent)' }} />
+              <div style={{ width: 40, height: 40, border: '3px solid rgba(34,197,94,0.25)', borderTopColor: '#22c55e', borderRadius: '50%', animation: 'spin 0.8s linear infinite', zIndex: 1 }} />
+              <p style={{ color: '#4ade80', fontSize: 13, fontWeight: 600, letterSpacing: '0.03em', zIndex: 1 }}>Leyendo cédula…</p>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
           )}
 
           {/* Corner brackets — top-left */}
-          <div className="absolute top-0 left-0"
-            style={{ width: 28, height: 28, borderTop: `3px solid ${cornerColor}`, borderLeft: `3px solid ${cornerColor}`, borderRadius: '2px 0 0 0', filter: `drop-shadow(0 0 5px ${cornerGlow})`, animation: 'cornerPulse 2s ease-in-out infinite' }} />
+          <div className="corner" style={{ position: 'absolute', top: 0, left: 0, width: 38, height: 38, borderTop: `4px solid ${frameColor}`, borderLeft: `4px solid ${frameColor}`, borderRadius: '3px 0 0 0', filter: `drop-shadow(0 0 6px ${frameColor}99)` }} />
           {/* top-right */}
-          <div className="absolute top-0 right-0"
-            style={{ width: 28, height: 28, borderTop: `3px solid ${cornerColor}`, borderRight: `3px solid ${cornerColor}`, borderRadius: '0 2px 0 0', filter: `drop-shadow(0 0 5px ${cornerGlow})`, animation: 'cornerPulse 2s ease-in-out infinite 0.5s' }} />
+          <div className="corner" style={{ position: 'absolute', top: 0, right: 0, width: 38, height: 38, borderTop: `4px solid ${frameColor}`, borderRight: `4px solid ${frameColor}`, borderRadius: '0 3px 0 0', filter: `drop-shadow(0 0 6px ${frameColor}99)`, animationDelay: '0.25s' }} />
           {/* bottom-left */}
-          <div className="absolute bottom-0 left-0"
-            style={{ width: 28, height: 28, borderBottom: `3px solid ${cornerColor}`, borderLeft: `3px solid ${cornerColor}`, borderRadius: '0 0 0 2px', filter: `drop-shadow(0 0 5px ${cornerGlow})`, animation: 'cornerPulse 2s ease-in-out infinite 1s' }} />
+          <div className="corner" style={{ position: 'absolute', bottom: 0, left: 0, width: 38, height: 38, borderBottom: `4px solid ${frameColor}`, borderLeft: `4px solid ${frameColor}`, borderRadius: '0 0 0 3px', filter: `drop-shadow(0 0 6px ${frameColor}99)`, animationDelay: '0.5s' }} />
           {/* bottom-right */}
-          <div className="absolute bottom-0 right-0"
-            style={{ width: 28, height: 28, borderBottom: `3px solid ${cornerColor}`, borderRight: `3px solid ${cornerColor}`, borderRadius: '0 0 2px 0', filter: `drop-shadow(0 0 5px ${cornerGlow})`, animation: 'cornerPulse 2s ease-in-out infinite 1.5s' }} />
+          <div className="corner" style={{ position: 'absolute', bottom: 0, right: 0, width: 38, height: 38, borderBottom: `4px solid ${frameColor}`, borderRight: `4px solid ${frameColor}`, borderRadius: '0 0 3px 0', filter: `drop-shadow(0 0 6px ${frameColor}99)`, animationDelay: '0.75s' }} />
         </div>
       </div>
 
-      {/* ── Bottom UI ─────────────────────────────────────────────────────── */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center"
-        style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.92) 60%, transparent 100%)', paddingBottom: 'env(safe-area-inset-bottom, 20px)' }}>
+      {/* ── Bottom bar ────────────────────────────────────────────────── */}
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 55%, transparent 100%)', paddingBottom: 'env(safe-area-inset-bottom, 24px)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
 
-        {/* Light warning */}
-        {tooDark && (
-          <p className="text-amber-400 text-xs font-medium mb-1 animate-pulse">
-            💡 Necesitas más luz
-          </p>
-        )}
+        {/* low-light warning */}
+        {tooDark && <p style={{ color: '#fbbf24', fontSize: 11, fontWeight: 600, marginBottom: 4, animation: 'fadein 0.3s ease' }}>💡 Necesitas más luz</p>}
 
-        {/* Instruction */}
-        <p className="text-zinc-300 text-xs text-center mb-5 px-6">
-          {cameraError
-            ? 'Toma una foto del reverso de la cédula'
-            : 'Coloca el reverso de la cédula dentro del marco'}
+        {/* hint text */}
+        <p style={{ color: '#a1a1aa', fontSize: 12, textAlign: 'center', margin: '0 0 6px', padding: '0 24px' }}>
+          {cameraOn ? 'Encuadra el reverso de la cédula dentro del marco' : 'Toca Capturar para fotografiar el reverso de la cédula'}
         </p>
-        <p className="text-zinc-600 text-[10px] mb-5">Mantén la cédula horizontal y plana</p>
+        <p style={{ color: '#52525b', fontSize: 10, margin: '0 0 18px' }}>Mantén la cédula horizontal y bien iluminada</p>
 
-        {/* Buttons row */}
-        <div className="flex items-center justify-between w-full px-10 mb-8">
+        {/* buttons row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 40px', marginBottom: 28 }}>
 
           {/* Flash */}
           {flashAvail ? (
             <button onClick={toggleFlash} disabled={processing}
-              className={`w-14 h-14 rounded-full flex items-center justify-center text-xl transition active:scale-90 ${flashOn ? 'bg-yellow-400 text-black' : 'bg-white/10 text-white'}`}>
+              style={{ width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer', fontSize: 22, background: flashOn ? '#facc15' : 'rgba(255,255,255,0.1)', color: flashOn ? '#000' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }}>
               ⚡
             </button>
-          ) : (
-            <div className="w-14 h-14" />
-          )}
+          ) : <div style={{ width: 54, height: 54 }} />}
 
-          {/* Main capture */}
-          {cameraError ? (
-            <button onClick={() => { setDebugLog([]); inputRef.current?.click() }}
-              disabled={processing}
-              className="w-20 h-20 rounded-full bg-emerald-500 border-4 border-emerald-300/50 flex items-center justify-center text-3xl shadow-lg shadow-emerald-900/50 active:scale-95 transition disabled:opacity-50">
-              {processing ? <div className="w-7 h-7 border-[3px] border-white/30 border-t-white rounded-full animate-spin" /> : '📷'}
-            </button>
-          ) : (
-            <button onClick={handleCapture} disabled={processing || !cameraReady}
-              className="w-20 h-20 rounded-full bg-emerald-500 border-4 border-emerald-300/50 flex items-center justify-center text-3xl shadow-lg shadow-emerald-900/50 active:scale-95 transition disabled:opacity-50">
-              {processing
-                ? <div className="w-7 h-7 border-[3px] border-white/30 border-t-white rounded-full animate-spin" />
-                : '📸'}
-            </button>
-          )}
+          {/* Capture */}
+          <button onClick={handleCapture} disabled={processing}
+            style={{ width: 78, height: 78, borderRadius: '50%', border: '4px solid rgba(74,222,128,0.45)', background: processing ? '#16a34a' : '#22c55e', cursor: processing ? 'default' : 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, boxShadow: '0 0 24px rgba(34,197,94,0.4)', transition: 'all 0.15s', opacity: processing ? 0.7 : 1 }}>
+            {processing
+              ? <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+              : <>
+                  <span style={{ fontSize: 26, lineHeight: 1 }}>📸</span>
+                  <span style={{ color: '#fff', fontSize: 9, fontWeight: 700, letterSpacing: '0.05em' }}>CAPTURAR</span>
+                </>}
+          </button>
 
           {/* Manual */}
           <button onClick={() => setShowManual(true)} disabled={!!confirmForm}
-            className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center text-xl text-white active:scale-90 transition disabled:opacity-40">
+            style={{ width: 54, height: 54, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: confirmForm ? 0.4 : 1 }}>
             ✏️
           </button>
         </div>
 
-        {/* Debug log */}
-        {debugLog.length > 0 && (
-          <div className="w-full px-4 mb-4 max-h-20 overflow-y-auto">
-            {debugLog.map((l, i) => (
-              <p key={i} className="text-yellow-300/70 text-[8px] font-mono leading-tight break-all">{l}</p>
-            ))}
+        {/* debug log */}
+        {log.length > 0 && (
+          <div style={{ width: '100%', padding: '0 12px 8px', maxHeight: 64, overflowY: 'auto' }}>
+            {log.map((l, i) => <p key={i} style={{ color: 'rgba(253,224,71,0.65)', fontSize: 8, fontFamily: 'monospace', margin: '1px 0', wordBreak: 'break-all' }}>{l}</p>)}
           </div>
         )}
       </div>
 
-      {/* ── Toast ─────────────────────────────────────────────────────────── */}
+      {/* ── Toast ─────────────────────────────────────────────────────── */}
       {toast && (
-        <div className="absolute inset-x-5 top-24 z-30" style={{ animation: 'fadeIn 0.2s ease' }}>
-          <div className={`rounded-2xl px-5 py-4 text-center shadow-2xl font-semibold text-sm ${
-            toast.color === 'red'    ? 'bg-red-600 text-white' :
-            toast.color === 'yellow' ? 'bg-amber-500 text-white' :
-                                       'bg-emerald-600 text-white'
-          }`}>{toast.msg}</div>
+        <div className="fadein" style={{ position: 'absolute', left: 16, right: 16, top: 100, zIndex: 60 }}>
+          <div style={{ background: toast.color, borderRadius: 16, padding: '14px 20px', textAlign: 'center', color: '#fff', fontWeight: 600, fontSize: 14, boxShadow: `0 8px 32px ${toast.color}55` }}>
+            {toast.msg}
+          </div>
         </div>
       )}
 
-      {/* ── Confirmation modal ────────────────────────────────────────────── */}
+      {/* ── Confirm modal ─────────────────────────────────────────────── */}
       {confirmForm && (
-        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-black/80" onClick={() => { setConfirmForm(null); setConfirmError('') }} />
-          <div className="relative w-full max-w-md bg-[#111113] border border-[#27272a] rounded-t-3xl sm:rounded-2xl max-h-[92dvh] overflow-y-auto"
-            style={{ animation: 'fadeIn 0.2s ease' }}>
+        <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.78)' }} onClick={() => { setConfirmForm(null); setConfirmError('') }} />
+          <div className="slideup" style={{ position: 'relative', width: '100%', maxWidth: 480, background: '#111', borderRadius: '24px 24px 0 0', maxHeight: '92dvh', overflowY: 'auto', borderTop: '1px solid #27272a' }}>
 
-            {/* Header */}
-            <div className={`px-6 pt-6 pb-4 rounded-t-3xl sm:rounded-t-2xl ${confirmForm.rawText ? 'bg-amber-900/20' : 'bg-emerald-900/20'}`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xl ${confirmForm.rawText ? 'bg-amber-500/20' : 'bg-emerald-500/20'}`}>
-                    {confirmForm.rawText ? '⚠️' : '✅'}
-                  </div>
-                  <div>
-                    <p className="text-white font-semibold text-base">
-                      {confirmForm.rawText ? 'Revisar datos' : 'Cédula detectada'}
-                    </p>
-                    <p className="text-zinc-400 text-xs">Confirma la información antes de guardar</p>
-                  </div>
+            {/* drag handle */}
+            <div style={{ width: 36, height: 4, background: '#3f3f46', borderRadius: 2, margin: '12px auto 0' }} />
+
+            {/* header */}
+            <div style={{ padding: '16px 20px 12px', background: confirmForm.rawText ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', background: confirmForm.rawText ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
+                  {confirmForm.rawText ? '⚠️' : '🪪'}
                 </div>
-                <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
-                  confirmForm.modo === 'PDF417' ? 'bg-blue-500/20 text-blue-300' :
-                  confirmForm.modo === 'MRZ'    ? 'bg-purple-500/20 text-purple-300' :
-                                                  'bg-zinc-700 text-zinc-300'
-                }`}>{confirmForm.modo}</span>
+                <div>
+                  <p style={{ color: '#fff', fontWeight: 600, fontSize: 15, margin: 0 }}>{confirmForm.rawText ? 'Completar datos' : 'Cédula detectada'}</p>
+                  <p style={{ color: '#71717a', fontSize: 11, margin: 0 }}>Verifica antes de registrar</p>
+                </div>
               </div>
+              <span style={{ fontSize: 10, padding: '3px 9px', borderRadius: 20, fontWeight: 700, background: confirmForm.modo === 'PDF417' ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)', color: confirmForm.modo === 'PDF417' ? '#93c5fd' : '#d8b4fe' }}>
+                {confirmForm.modo}
+              </span>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
-              {/* Raw text (when parse failed) */}
+            <div style={{ padding: '16px 20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+              {/* raw text */}
               {confirmForm.rawText && (
                 <div>
-                  <p className="text-xs text-zinc-500 mb-1.5 font-medium">Texto detectado — completa los campos manualmente</p>
-                  <div className="bg-black/50 border border-amber-500/20 rounded-xl px-3 py-2 text-amber-300/80 text-[9px] font-mono break-all leading-relaxed max-h-20 overflow-y-auto">
+                  <p style={{ color: '#71717a', fontSize: 10, margin: '0 0 6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Texto detectado</p>
+                  <div style={{ background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '8px 10px', color: 'rgba(253,191,74,0.8)', fontSize: 9, fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: 72, overflowY: 'auto' }}>
                     {confirmForm.rawText}
                   </div>
                 </div>
               )}
 
-              {/* Fields */}
+              {/* cedula */}
               <div>
-                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>🪪</span> Número de cédula</label>
-                <input value={confirmForm.cedula}
-                  onChange={e => setConfirmForm(f => f ? { ...f, cedula: e.target.value } : f)}
-                  inputMode="numeric" className={FIELD} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>🪪</span> Número de cédula</label>
+                <input value={confirmForm.cedula} onChange={e => setConfirmForm(f => f ? { ...f, cedula: e.target.value } : f)} inputMode="numeric" className={FIELD} />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* nombres / apellidos */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>👤</span> Nombres</label>
-                  <input value={confirmForm.nombres}
-                    onChange={e => setConfirmForm(f => f ? { ...f, nombres: e.target.value } : f)}
-                    className={FIELD} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>👤</span> Nombres</label>
+                  <input value={confirmForm.nombres} onChange={e => setConfirmForm(f => f ? { ...f, nombres: e.target.value } : f)} className={FIELD} />
                 </div>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>👥</span> Apellidos</label>
-                  <input value={confirmForm.apellidos}
-                    onChange={e => setConfirmForm(f => f ? { ...f, apellidos: e.target.value } : f)}
-                    className={FIELD} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>👥</span> Apellidos</label>
+                  <input value={confirmForm.apellidos} onChange={e => setConfirmForm(f => f ? { ...f, apellidos: e.target.value } : f)} className={FIELD} />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* fecha / edad */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>📅</span> Nacimiento</label>
-                  <input type="date" value={confirmForm.fechaNacimiento}
-                    onChange={e => setConfirmForm(f => f ? { ...f, fechaNacimiento: e.target.value } : f)}
-                    className={`${FIELD} [color-scheme:dark]`} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>📅</span> Nacimiento</label>
+                  <input type="date" value={confirmForm.fechaNacimiento} onChange={e => setConfirmForm(f => f ? { ...f, fechaNacimiento: e.target.value } : f)} style={{ colorScheme: 'dark' }} className={FIELD} />
                 </div>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5">Edad</label>
-                  <div className={`${FIELD} flex items-center`}>
-                    {confirmForm.fechaNacimiento ? (
-                      <><span className="text-2xl font-bold text-white">{calcEdad(confirmForm.fechaNacimiento)}</span><span className="text-zinc-400 ml-1 text-xs">años</span></>
-                    ) : <span className="text-zinc-600">—</span>}
+                  <label style={{ color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Edad</label>
+                  <div className={FIELD} style={{ display: 'flex', alignItems: 'center' }}>
+                    {confirmForm.fechaNacimiento
+                      ? <><span style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{calcEdad(confirmForm.fechaNacimiento)}</span><span style={{ color: '#71717a', fontSize: 12, marginLeft: 4 }}>años</span></>
+                      : <span style={{ color: '#3f3f46' }}>—</span>}
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* sexo / rh */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>⚧</span> Sexo</label>
-                  <select value={confirmForm.sexo}
-                    onChange={e => setConfirmForm(f => f ? { ...f, sexo: e.target.value as 'M' | 'F' | '' } : f)}
-                    className={`${FIELD} [color-scheme:dark]`}>
-                    <option value="">—</option>
-                    <option value="M">Masculino</option>
-                    <option value="F">Femenino</option>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>⚧</span> Sexo</label>
+                  <select value={confirmForm.sexo} onChange={e => setConfirmForm(f => f ? { ...f, sexo: e.target.value as 'M'|'F'|'' } : f)} style={{ colorScheme: 'dark' }} className={FIELD}>
+                    <option value="">—</option><option value="M">Masculino</option><option value="F">Femenino</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1.5 flex items-center gap-1.5"><span>🩸</span> RH</label>
-                  <input value={confirmForm.rh}
-                    onChange={e => setConfirmForm(f => f ? { ...f, rh: e.target.value } : f)}
-                    placeholder="O+" className={FIELD} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#71717a', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}><span>🩸</span> RH</label>
+                  <input value={confirmForm.rh} onChange={e => setConfirmForm(f => f ? { ...f, rh: e.target.value } : f)} placeholder="O+" className={FIELD} />
                 </div>
               </div>
 
-              {confirmError && (
-                <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">{confirmError}</p>
-              )}
+              {confirmError && <p style={{ color: '#f87171', fontSize: 12, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 10, padding: '8px 12px', margin: 0 }}>{confirmError}</p>}
 
-              <div className="flex gap-3 pt-1 pb-2">
+              <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
                 <button onClick={() => { setConfirmForm(null); setConfirmError('') }}
-                  className="flex-1 py-3.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition font-medium">
+                  style={{ flex: 1, padding: '14px 0', borderRadius: 14, border: '1px solid #27272a', background: 'transparent', color: '#71717a', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>
                   Cancelar
                 </button>
                 <button onClick={handleConfirm} disabled={confirmSaving}
-                  className="flex-1 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold disabled:opacity-60 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/40">
-                  {confirmSaving
-                    ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Guardando…</>
-                    : '✅ Confirmar'}
+                  style={{ flex: 2, padding: '14px 0', borderRadius: 14, border: 'none', background: confirmSaving ? '#15803d' : '#16a34a', color: '#fff', fontSize: 14, fontWeight: 700, cursor: confirmSaving ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 16px rgba(22,163,74,0.35)', opacity: confirmSaving ? 0.7 : 1 }}>
+                  {confirmSaving ? <><div style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Guardando…</> : '✅ Confirmar registro'}
                 </button>
               </div>
             </div>
@@ -968,71 +754,56 @@ export default function ScannerPage() {
         </div>
       )}
 
-      {/* ── Manual modal ──────────────────────────────────────────────────── */}
+      {/* ── Manual modal ──────────────────────────────────────────────── */}
       {showManual && (
-        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-black/75" onClick={() => { setShowManual(false); setManualError('') }} />
-          <div className="relative w-full max-w-md bg-[#111113] border border-[#27272a] rounded-t-3xl sm:rounded-2xl p-6 max-h-[90dvh] overflow-y-auto"
-            style={{ animation: 'fadeIn 0.2s ease' }}>
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-semibold text-white text-base">✏️ Registrar manualmente</h2>
+        <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)' }} onClick={() => { setShowManual(false); setManualError('') }} />
+          <div className="slideup" style={{ position: 'relative', width: '100%', maxWidth: 480, background: '#111', borderRadius: '24px 24px 0 0', borderTop: '1px solid #27272a', maxHeight: '90dvh', overflowY: 'auto' }}>
+            <div style={{ width: 36, height: 4, background: '#3f3f46', borderRadius: 2, margin: '12px auto 0' }} />
+            <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 style={{ color: '#fff', fontSize: 16, fontWeight: 600, margin: 0 }}>✏️ Registrar manualmente</h2>
               <button onClick={() => { setShowManual(false); setManualError('') }}
-                className="w-8 h-8 rounded-lg bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition">✕</button>
+                style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.08)', color: '#71717a', cursor: 'pointer', fontSize: 14 }}>✕</button>
             </div>
-            <form onSubmit={handleManual} className="space-y-3">
+            <form onSubmit={handleManual} style={{ padding: '0 20px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">🪪 Número de cédula *</label>
-                <input required inputMode="numeric" value={manualForm.cedula}
-                  onChange={e => setManualForm(f => ({ ...f, cedula: e.target.value }))}
-                  placeholder="1234567890" className={FIELD} />
+                <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>🪪 Número de cédula *</label>
+                <input required inputMode="numeric" value={manualForm.cedula} onChange={e => setManualForm(f => ({ ...f, cedula: e.target.value }))} placeholder="1234567890" className={FIELD} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">👤 Nombres *</label>
-                  <input required value={manualForm.nombres}
-                    onChange={e => setManualForm(f => ({ ...f, nombres: e.target.value }))}
-                    placeholder="Juan" className={FIELD} />
+                  <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>👤 Nombres *</label>
+                  <input required value={manualForm.nombres} onChange={e => setManualForm(f => ({ ...f, nombres: e.target.value }))} placeholder="Juan" className={FIELD} />
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">👥 Apellidos *</label>
-                  <input required value={manualForm.apellidos}
-                    onChange={e => setManualForm(f => ({ ...f, apellidos: e.target.value }))}
-                    placeholder="García" className={FIELD} />
+                  <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>👥 Apellidos *</label>
+                  <input required value={manualForm.apellidos} onChange={e => setManualForm(f => ({ ...f, apellidos: e.target.value }))} placeholder="García" className={FIELD} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">📅 Nacimiento *</label>
-                  <input required type="date" value={manualForm.fechaNacimiento}
-                    onChange={e => setManualForm(f => ({ ...f, fechaNacimiento: e.target.value }))}
-                    className={`${FIELD} [color-scheme:dark]`} />
+                  <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>📅 Nacimiento *</label>
+                  <input required type="date" value={manualForm.fechaNacimiento} onChange={e => setManualForm(f => ({ ...f, fechaNacimiento: e.target.value }))} style={{ colorScheme: 'dark' }} className={FIELD} />
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">⚧ Sexo *</label>
-                  <select required value={manualForm.sexo}
-                    onChange={e => setManualForm(f => ({ ...f, sexo: e.target.value as 'M' | 'F' | '' }))}
-                    className={`${FIELD} [color-scheme:dark]`}>
-                    <option value="">—</option>
-                    <option value="M">Masculino</option>
-                    <option value="F">Femenino</option>
+                  <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>⚧ Sexo *</label>
+                  <select required value={manualForm.sexo} onChange={e => setManualForm(f => ({ ...f, sexo: e.target.value as 'M'|'F'|'' }))} style={{ colorScheme: 'dark' }} className={FIELD}>
+                    <option value="">—</option><option value="M">Masculino</option><option value="F">Femenino</option>
                   </select>
                 </div>
               </div>
-              {manualForm.fechaNacimiento && (
-                <p className="text-zinc-500 text-xs">Edad: <span className="text-white font-semibold">{calcEdad(manualForm.fechaNacimiento)} años</span></p>
-              )}
+              {manualForm.fechaNacimiento && <p style={{ color: '#52525b', fontSize: 11, margin: 0 }}>Edad: <strong style={{ color: '#fff' }}>{calcEdad(manualForm.fechaNacimiento)} años</strong></p>}
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">🩸 RH (opcional)</label>
-                <input value={manualForm.rh} onChange={e => setManualForm(f => ({ ...f, rh: e.target.value }))}
-                  placeholder="O+" className={FIELD} />
+                <label style={{ display: 'block', color: '#71717a', fontSize: 11, marginBottom: 6 }}>🩸 RH (opcional)</label>
+                <input value={manualForm.rh} onChange={e => setManualForm(f => ({ ...f, rh: e.target.value }))} placeholder="O+" className={FIELD} />
               </div>
-              {manualError && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">{manualError}</p>}
-              <div className="flex gap-3 pt-1">
+              {manualError && <p style={{ color: '#f87171', fontSize: 12, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 10, padding: '8px 12px', margin: 0 }}>{manualError}</p>}
+              <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
                 <button type="button" onClick={() => { setShowManual(false); setManualError('') }}
-                  className="flex-1 py-3 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">Cancelar</button>
+                  style={{ flex: 1, padding: '13px 0', borderRadius: 14, border: '1px solid #27272a', background: 'transparent', color: '#71717a', fontSize: 13, cursor: 'pointer' }}>Cancelar</button>
                 <button type="submit" disabled={manualSaving}
-                  className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-500 disabled:opacity-60 transition flex items-center justify-center gap-2">
-                  {manualSaving ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Guardando…</> : 'Registrar'}
+                  style={{ flex: 2, padding: '13px 0', borderRadius: 14, border: 'none', background: '#16a34a', color: '#fff', fontSize: 13, fontWeight: 700, cursor: manualSaving ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: manualSaving ? 0.7 : 1 }}>
+                  {manualSaving ? <><div style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />Guardando…</> : 'Registrar'}
                 </button>
               </div>
             </form>
