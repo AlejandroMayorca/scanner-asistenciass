@@ -4,12 +4,27 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { BrowserMultiFormatReader } from '@zxing/browser'
 import { BarcodeFormat, DecodeHintType } from '@zxing/library'
-import { doc, getDoc, Timestamp } from 'firebase/firestore'
+import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../../../../lib/firebase'
 import { registrarAsistencia, checkDuplicado, getTotalAsistencias } from '../../../../lib/firestore'
 import type { Evento } from '../../../../lib/types'
 
-// ── Parsed cedula ─────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function capitalize(s: string): string {
+  if (!s) return ''
+  return s.toLowerCase().replace(/\b[a-záéíóúñ]/gi, c => c.toUpperCase())
+}
+
+function calcEdad(fechaNacimiento: string): number {
+  const [y, m, d] = fechaNacimiento.split('-').map(Number)
+  const hoy = new Date()
+  let edad = hoy.getFullYear() - y
+  if (hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) edad--
+  return Math.max(0, edad)
+}
+
+// ── Cedula result ─────────────────────────────────────────────────────────────
 
 interface Cedula {
   cedula: string
@@ -22,58 +37,88 @@ interface Cedula {
   modo: 'PDF417' | 'MRZ'
 }
 
-// ── PDF417 parser (cédula vieja) ──────────────────────────────────────────────
-// Fields separated by \x1E (Record Separator):
-//   [0]=apellidos  [1]=nombres  [2]=sexo  [3]=cedula  [4]=rh
+// ── PDF417 parser ─────────────────────────────────────────────────────────────
+// Cédula vieja — reverso — campos separados por \x1E (ASCII 30)
+// [0]=apellidos  [1]=nombres  [2]=sexo  [3]=cedula  [4]=rh  [5]=fechaNac(YYYYMMDD)
 
 const RS = '\x1e'
 
-function cleanName(s: string) {
-  return s.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ\s]/g, '').trim()
+function parseFechaPdf(raw: string): { fechaNacimiento: string; edad: number } | null {
+  // Accepts YYYYMMDD or YYYY-MM-DD or YYYY/MM/DD
+  const m = raw.replace(/\D/g, '')
+  if (m.length !== 8) return null
+  const y = m.slice(0, 4), mo = m.slice(4, 6), d = m.slice(6, 8)
+  const y4 = parseInt(y)
+  if (y4 < 1900 || y4 > new Date().getFullYear()) return null
+  const fechaNacimiento = `${y}-${mo}-${d}`
+  return { fechaNacimiento, edad: calcEdad(fechaNacimiento) }
+}
+
+function cleanNamePdf(s: string): string {
+  return capitalize(s.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ\s]/g, '').trim())
 }
 
 function parsePdf417(raw: string): Cedula | null {
-  // Primary: \x1E separator
+  if (!raw || raw.length < 5) return null
+
+  // ── Primary: \x1E separator ──────────────────────────────────────────────
   if (raw.includes(RS)) {
-    const f = raw.split(RS)
+    const f = raw.split(RS).map(s => s.trim())
     if (f.length >= 4) {
-      const apellidos = cleanName(f[0])
-      const nombres   = cleanName(f[1])
-      const sexo      = /^[MF]$/.test(f[2]?.trim()) ? (f[2].trim() as 'M' | 'F') : undefined
-      const cedula    = f[3]?.replace(/\D/g, '').slice(0, 12) ?? ''
+      const apellidos = cleanNamePdf(f[0])
+      const nombres   = cleanNamePdf(f[1])
+      const sexo      = /^[MF]$/i.test(f[2] ?? '') ? (f[2].toUpperCase() as 'M' | 'F') : undefined
+      const cedula    = (f[3] ?? '').replace(/\D/g, '').slice(0, 12)
       const rh        = f[4]?.trim() || undefined
-      if (cedula.length >= 6 && apellidos) {
-        return { cedula, nombres, apellidos, sexo, rh, modo: 'PDF417' }
+      const fnac      = f[5] ? parseFechaPdf(f[5]) : null
+      if (cedula.length >= 5 && apellidos) {
+        return { cedula, nombres, apellidos, sexo, rh, modo: 'PDF417', ...(fnac ?? {}) }
       }
     }
   }
-  // Fallback: ; | \n separators
+
+  // ── Fallback: ; | \n separators ──────────────────────────────────────────
   for (const sep of [';', '|', '\n']) {
+    if (!raw.includes(sep)) continue
     const fields = raw.split(sep).map(s => s.trim()).filter(Boolean)
     const ci = fields.findIndex(f => /^\d{6,12}$/.test(f))
     if (ci >= 2) {
-      const apellidos = cleanName(fields[ci - 2])
-      const nombres   = cleanName(fields[ci - 1])
+      const apellidos = cleanNamePdf(fields[ci - 2])
+      const nombres   = cleanNamePdf(fields[ci - 1])
       const cedula    = fields[ci]
-      const sexo      = fields.find(f => /^[MF]$/.test(f)) as 'M' | 'F' | undefined
-      if (apellidos) return { cedula, nombres, apellidos, sexo, modo: 'PDF417' }
+      const sexo      = fields.find(f => /^[MF]$/i.test(f))?.toUpperCase() as 'M' | 'F' | undefined
+      const rh        = fields.find(f => /^[ABO][+-]$/i.test(f))
+      const fnacStr   = fields.find(f => /^\d{8}$/.test(f) && f !== cedula)
+      const fnac      = fnacStr ? parseFechaPdf(fnacStr) : null
+      if (apellidos && cedula) {
+        return { cedula, nombres, apellidos, sexo, rh, modo: 'PDF417', ...(fnac ?? {}) }
+      }
     }
   }
+
   return null
 }
 
-// ── MRZ parser (cédula nueva TD1) ────────────────────────────────────────────
-// Line 1: IDCOL + doc_number(5-13) + check...
-// Line 2: YYMMDD(0-5) + check + sexo(7) + ...
-// Line 3: APELLIDOS<<NOMBRES
+// ── MRZ parser ────────────────────────────────────────────────────────────────
+// Cédula nueva — reverso — formato ICCOL (TD1 Colombia)
+//
+// Línea 1: ICCOL + cédula(9) + checkDigit + ...  total 30 chars
+// Línea 2: YYMMDD + checkDigit + sexo(M/F) + fechaExp(6) + checkDigit + COL + ...  total 30 chars
+// Línea 3: APELLIDO1<APELLIDO2<<NOMBRE1<NOMBRE2<<  total 30 chars
+//
+// Ejemplo real:
+//   ICCOL023442784819001<<<<<<<<
+//   0503291M3306149COL1077721837<6
+//   MAYORCA<SOTO<<ALEJANDRO<<<<<
 
-function parseDob(yymmdd: string): { fechaNacimiento: string; edad: number } | null {
+function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } | null {
   if (!/^\d{6}$/.test(yymmdd)) return null
   const yy = parseInt(yymmdd.slice(0, 2))
   const mm = parseInt(yymmdd.slice(2, 4))
   const dd = parseInt(yymmdd.slice(4, 6))
   if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null
   const now = new Date()
+  // Two-digit year: > current year → 1900s, else 2000s
   const fullYear = (2000 + yy) > now.getFullYear() ? 1900 + yy : 2000 + yy
   let edad = now.getFullYear() - fullYear
   if (now.getMonth() + 1 < mm || (now.getMonth() + 1 === mm && now.getDate() < dd)) edad--
@@ -83,40 +128,105 @@ function parseDob(yymmdd: string): { fechaNacimiento: string; edad: number } | n
   }
 }
 
-function parseMrz(ocrText: string): Cedula | null {
-  const lines = ocrText
-    .split('\n')
-    .map(l => l.trim().toUpperCase().replace(/[^A-Z0-9<]/g, ''))
-    .filter(l => l.length >= 28)
+function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
+  // ── Cédula: line 1, positions 5–13 (9 chars) ─────────────────────────────
+  let cedula = l1.slice(5, 14).replace(/</g, '')
+  // Remove leading zeros if total digits < 10
+  if (/^0/.test(cedula) && cedula.length < 10) {
+    cedula = cedula.replace(/^0+/, '') || cedula
+  }
+  if (cedula.length < 5 || !/^\d+$/.test(cedula)) return null
 
-  const l1i = lines.findIndex(l =>
-    l.startsWith('IDCOL') || l.startsWith('ID<COL') || l.startsWith('1DCOL') || l.startsWith('IDCO'),
-  )
-  if (l1i < 0 || l1i + 2 >= lines.length) return null
+  // ── Date of birth: line 2, positions 0–5 ─────────────────────────────────
+  const dob  = parseDobMrz(l2.slice(0, 6))
 
-  const l1 = lines[l1i].padEnd(30, '<')
-  const l2 = (lines[l1i + 1] ?? '').padEnd(30, '<')
-  const l3 = (lines[l1i + 2] ?? '').padEnd(30, '<')
-
-  const cedula = l1.slice(5, 14).replace(/</g, '').replace(/\D/g, '')
-  if (cedula.length < 6) return null
-
-  const dob  = parseDob(l2.slice(0, 6))
-  const sc   = l2[7]
+  // ── Sex: line 2, position 7 ───────────────────────────────────────────────
+  const sc   = l2[7] ?? ''
   const sexo: 'M' | 'F' | undefined = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
 
-  const nameField = l3.replace(/<+$/, '')
-  const sepI = nameField.indexOf('<<')
+  // ── Names: line 3 — APELLIDOS<<NOMBRES ────────────────────────────────────
+  const nameRaw = l3.replace(/<+$/, '')
+  const sepIdx  = nameRaw.indexOf('<<')
   let apellidos = '', nombres = ''
-  if (sepI >= 0) {
-    apellidos = nameField.slice(0, sepI).replace(/<+/g, ' ').trim()
-    nombres   = nameField.slice(sepI + 2).replace(/<+/g, ' ').trim()
+  if (sepIdx >= 0) {
+    apellidos = nameRaw.slice(0, sepIdx).replace(/<+/g, ' ').trim()
+    nombres   = nameRaw.slice(sepIdx + 2).replace(/<+/g, ' ').trim()
   } else {
-    apellidos = nameField.replace(/<+/g, ' ').trim()
+    // No << separator — treat everything as apellidos
+    apellidos = nameRaw.replace(/<+/g, ' ').trim()
   }
 
-  if (!apellidos) return null
-  return { cedula, nombres, apellidos, sexo, modo: 'MRZ', ...(dob ?? {}) }
+  if (!apellidos && !cedula) return null
+
+  return {
+    cedula,
+    nombres:   capitalize(nombres),
+    apellidos: capitalize(apellidos),
+    sexo,
+    modo: 'MRZ',
+    ...(dob ?? {}),
+  }
+}
+
+function parseMrz(ocrText: string): Cedula | null {
+  if (!ocrText || ocrText.length < 20) return null
+
+  // Normalize: uppercase, keep only A-Z, 0-9, < and spaces
+  const raw   = ocrText.toUpperCase()
+  const lines = raw
+    .split('\n')
+    .map(l => l.trim().replace(/[^A-Z0-9<]/g, ''))
+    .filter(l => l.length >= 15)
+
+  if (lines.length === 0) return null
+
+  // ── Strategy 1: find line 1 by ICCOL / IDCOL prefix ─────────────────────
+  const l1Candidates = ['ICCOL', 'IDCOL', 'IC<COL', 'ID<COL', 'ICCOL']
+  for (const prefix of l1Candidates) {
+    const l1i = lines.findIndex(l => l.startsWith(prefix))
+    if (l1i >= 0 && l1i + 2 < lines.length) {
+      const result = parseMrzLines(
+        lines[l1i].padEnd(30, '<'),
+        lines[l1i + 1].padEnd(30, '<'),
+        lines[l1i + 2].padEnd(30, '<'),
+      )
+      if (result) return result
+    }
+  }
+
+  // ── Strategy 2: find line 2 by date+sex pattern ───────────────────────────
+  // Pattern: 6 digits + any digit + M or F
+  const l2i = lines.findIndex(l => /^\d{7}[MF]/.test(l))
+  if (l2i > 0 && l2i + 1 < lines.length) {
+    const result = parseMrzLines(
+      lines[l2i - 1].padEnd(30, '<'),
+      lines[l2i].padEnd(30, '<'),
+      lines[l2i + 1].padEnd(30, '<'),
+    )
+    if (result) return result
+  }
+
+  // ── Strategy 3: find line 3 by << pattern ────────────────────────────────
+  const l3i = lines.findIndex(l => l.includes('<<'))
+  if (l3i >= 2) {
+    const result = parseMrzLines(
+      lines[l3i - 2].padEnd(30, '<'),
+      lines[l3i - 1].padEnd(30, '<'),
+      lines[l3i].padEnd(30, '<'),
+    )
+    if (result) return result
+  }
+  // l3 might be the first line with <<
+  if (l3i >= 0 && l3i - 2 < 0) {
+    // Try with partial context — just parse names from line 3
+    const l3 = lines[l3i].padEnd(30, '<')
+    const l2 = l3i > 0 ? lines[l3i - 1].padEnd(30, '<') : '<'.repeat(30)
+    const l1 = l3i > 1 ? lines[l3i - 2].padEnd(30, '<') : '<'.repeat(30)
+    const result = parseMrzLines(l1, l2, l3)
+    if (result) return result
+  }
+
+  return null
 }
 
 // ── ZXing hints ───────────────────────────────────────────────────────────────
@@ -128,8 +238,7 @@ const PDF417_HINTS = new Map<DecodeHintType, unknown>([
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-type ScanMode = 'PDF417' | 'MRZ'
-type BannerType = 'ok' | 'dup' | 'err'
+type BannerState = { type: 'ok' | 'dup' | 'err'; msg: string }
 
 export default function ScannerPage() {
   const { id: eventoId } = useParams<{ id: string }>()
@@ -144,38 +253,38 @@ export default function ScannerPage() {
   const readerRef    = useRef<BrowserMultiFormatReader | null>(null)
   const tesseractRef = useRef<import('tesseract.js').Worker | null>(null)
 
-  // Scan state (refs to avoid stale closures in intervals)
-  const activeRef     = useRef(false)
-  const processingRef = useRef(false)
-  const modeRef       = useRef<ScanMode>('PDF417')
-  const mrzReadyRef   = useRef(false)
-  const lastMrzRef    = useRef(0)
+  // Scan control
+  const activeRef     = useRef(false)  // camera ready and not paused
+  const processingRef = useRef(false)  // registering a cedula right now
+  const mrzBusyRef    = useRef(false)  // Tesseract is running
+  const mrzReadyRef   = useRef(false)  // Tesseract worker loaded
   const onDetectedRef = useRef<((c: Cedula) => void) | null>(null)
-  const intervalRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pdfTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mrzTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // UI state
-  const [mode,      setMode]      = useState<ScanMode>('PDF417')
-  const [torchOn,   setTorchOn]   = useState(false)
-  const [hasTorch,  setHasTorch]  = useState(false)
-  const [mrzReady,  setMrzReady]  = useState(false)
-  const [saving,    setSaving]    = useState(false)
-  const [banner,    setBanner]    = useState<{ type: BannerType; msg: string } | null>(null)
-  const [lastReg,   setLastReg]   = useState('')
-  const [total,     setTotal]     = useState(0)
-  const [evento,    setEvento]    = useState<Evento | null>(null)
-  const [camError,  setCamError]  = useState<string | null>(null)
+  const [mode,       setMode]       = useState<'PDF417' | 'MRZ'>('PDF417')
+  const [torchOn,    setTorchOn]    = useState(false)
+  const [hasTorch,   setHasTorch]   = useState(false)
+  const [mrzReady,   setMrzReady]   = useState(false)
+  const [saving,     setSaving]     = useState(false)
+  const [banner,     setBanner]     = useState<BannerState | null>(null)
+  const [lastReg,    setLastReg]    = useState('')
+  const [total,      setTotal]      = useState(0)
+  const [evento,     setEvento]     = useState<Evento | null>(null)
+  const [camError,   setCamError]   = useState<string | null>(null)
   const [showManual, setShowManual] = useState(false)
   const [manualForm, setManualForm] = useState({
-    cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '' as 'M' | 'F' | '', rh: '',
+    cedula: '', nombres: '', apellidos: '',
+    fechaNacimiento: '', sexo: '' as 'M' | 'F' | '', rh: '',
   })
   const [manualSaving, setManualSaving] = useState(false)
   const [manualError,  setManualError]  = useState('')
 
-  // Keep mode ref in sync
-  useEffect(() => { modeRef.current = mode }, [mode])
+  // Keep mrzReadyRef in sync
   useEffect(() => { mrzReadyRef.current = mrzReady }, [mrzReady])
 
-  // ── Detected handler ─────────────────────────────────────────────────────
+  // ── handleDetected ────────────────────────────────────────────────────────
 
   const handleDetected = useCallback(async (c: Cedula) => {
     if (processingRef.current || !activeRef.current) return
@@ -201,7 +310,10 @@ export default function ScannerPage() {
         const t = await getTotalAsistencias(eventoId)
         setTotal(t)
         setLastReg(`${c.apellidos} ${c.nombres}`)
-        setBanner({ type: 'ok', msg: `✅ ${c.apellidos} ${c.nombres}${c.edad ? ` — ${c.edad} años` : ''}` })
+        setBanner({
+          type: 'ok',
+          msg: `✅ ${c.apellidos} ${c.nombres}${c.edad ? ` — ${c.edad} años` : ''}`,
+        })
       }
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string }
@@ -223,15 +335,19 @@ export default function ScannerPage() {
   useEffect(() => {
     let alive = true
     ;(async () => {
-      const { createWorker } = await import('tesseract.js')
-      const w = await createWorker('eng', 1, { logger: () => {} })
-      await w.setParameters({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<' as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tessedit_pageseg_mode: '6' as any,
-      })
-      if (alive) { tesseractRef.current = w; setMrzReady(true) }
+      try {
+        const { createWorker } = await import('tesseract.js')
+        const w = await createWorker('eng', 1, { logger: () => {} })
+        await w.setParameters({
+          // Include '<' — it's the MRZ filler and field separator
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<' as any,
+          // PSM 6: uniform block of text — best for MRZ
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tessedit_pageseg_mode: '6' as any,
+        })
+        if (alive) { tesseractRef.current = w; setMrzReady(true) }
+      } catch { /* Tesseract failed to load — OCR will be unavailable */ }
     })()
     return () => {
       alive = false
@@ -239,7 +355,9 @@ export default function ScannerPage() {
     }
   }, [])
 
-  // ── Camera + scan interval ────────────────────────────────────────────────
+  // ── Camera + parallel scan intervals ─────────────────────────────────────
+  // Both PDF417 and MRZ always run simultaneously.
+  // The first one to detect a valid cedula wins (processingRef prevents double-fire).
 
   useEffect(() => {
     let alive = true
@@ -255,16 +373,15 @@ export default function ScannerPage() {
         const track = stream.getVideoTracks()[0]
         trackRef.current = track
 
-        // Detect torch capability
+        // Torch support detection
         const caps = track.getCapabilities?.() as Record<string, unknown> | undefined
         if (caps && 'torch' in caps) {
           setHasTorch(true)
         } else {
-          // Try applying torch to detect support
           try {
             await track.applyConstraints({ advanced: [{ torch: false } as MediaTrackConstraintSet] })
             setHasTorch(true)
-          } catch { /* no torch */ }
+          } catch { /* torch not supported */ }
         }
 
         const video = videoRef.current!
@@ -279,52 +396,54 @@ export default function ScannerPage() {
 
         activeRef.current = true
 
-        // Single interval at 400ms; MRZ only fires every 3 ticks (≈1200ms)
-        intervalRef.current = setInterval(async () => {
-          if (!alive || processingRef.current || !activeRef.current) return
-          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return
-
+        // Draws current video frame to shared canvas. Returns true if video is ready.
+        const drawFrame = (): boolean => {
+          if (!alive) return false
+          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return false
           canvas.width  = video.videoWidth
           canvas.height = video.videoHeight
           ctx.drawImage(video, 0, 0)
+          return true
+        }
 
-          const m = modeRef.current
-
-          if (m === 'PDF417') {
-            try {
-              const result = reader.decodeFromCanvas(canvas)
-              const parsed = parsePdf417(result.getText())
-              if (parsed) onDetectedRef.current?.(parsed)
-            } catch { /* NotFoundException on empty frames */ } finally {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              ;(reader as any).reader?.reset?.()
-            }
-            return
-          }
-
-          // MRZ: throttle to 1200ms
-          if (m === 'MRZ' && mrzReadyRef.current) {
-            const now = Date.now()
-            if (now - lastMrzRef.current < 1200) return
-            lastMrzRef.current = now
-
-            // Crop bottom 40% (MRZ zone on the back of the card)
-            const cropY = Math.floor(canvas.height * 0.60)
-            const crop  = document.createElement('canvas')
-            crop.width  = canvas.width
-            crop.height = canvas.height - cropY
-            crop.getContext('2d')!.drawImage(
-              canvas, 0, cropY, canvas.width, crop.height,
-              0, 0, canvas.width, crop.height,
-            )
-
-            try {
-              const { data: { text } } = await tesseractRef.current!.recognize(crop)
-              const parsed = parseMrz(text)
-              if (parsed) onDetectedRef.current?.(parsed)
-            } catch { /* OCR errors */ }
+        // ── PDF417 interval: 400ms ──────────────────────────────────────────
+        pdfTimerRef.current = setInterval(() => {
+          if (!alive || processingRef.current || !activeRef.current) return
+          if (!drawFrame()) return
+          try {
+            const result = reader.decodeFromCanvas(canvas)
+            const parsed = parsePdf417(result.getText())
+            if (parsed) onDetectedRef.current?.(parsed)
+          } catch {
+            // ZXing throws NotFoundException on every frame without a barcode — expected
+          } finally {
+            // Reset ZXing internal state to avoid stale decode artifacts
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ;(reader as any).reader?.reset?.()
           }
         }, 400)
+
+        // ── MRZ (Tesseract) interval: 1000ms ────────────────────────────────
+        // Processes full frame — MRZ may be anywhere in the camera view.
+        mrzTimerRef.current = setInterval(async () => {
+          if (!alive || processingRef.current || !activeRef.current) return
+          if (!tesseractRef.current || !mrzReadyRef.current) return
+          if (mrzBusyRef.current) return  // previous OCR still running
+          if (!drawFrame()) return
+
+          mrzBusyRef.current = true
+          try {
+            // Tesseract captures the canvas pixel data immediately on call,
+            // so subsequent PDF417 redraws don't affect this recognition.
+            const { data: { text } } = await tesseractRef.current.recognize(canvas)
+            const parsed = parseMrz(text)
+            if (parsed) onDetectedRef.current?.(parsed)
+          } catch {
+            // OCR error — ignore
+          } finally {
+            mrzBusyRef.current = false
+          }
+        }, 1000)
 
       } catch {
         if (alive) setCamError('No se pudo acceder a la cámara. Verifica los permisos.')
@@ -333,7 +452,8 @@ export default function ScannerPage() {
 
     return () => {
       alive = false
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (pdfTimerRef.current) clearInterval(pdfTimerRef.current)
+      if (mrzTimerRef.current) clearInterval(mrzTimerRef.current)
       trackRef.current?.stop()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -357,45 +477,38 @@ export default function ScannerPage() {
     try {
       await trackRef.current.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] })
       setTorchOn(next)
-    } catch { /* silently ignore if not supported */ }
+    } catch { /* silently ignore */ }
   }, [torchOn])
 
-  // ── Manual save ───────────────────────────────────────────────────────────
-
-  const calcEdad = (fn: string) => {
-    const [y, m, d] = fn.split('-').map(Number)
-    const hoy = new Date()
-    let edad = hoy.getFullYear() - y
-    if (hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) edad--
-    return Math.max(0, edad)
-  }
+  // ── Manual registration ───────────────────────────────────────────────────
 
   const handleManual = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!manualForm.cedula || !manualForm.nombres || !manualForm.apellidos ||
-        !manualForm.fechaNacimiento || !manualForm.sexo) return
+    const { cedula, nombres, apellidos, fechaNacimiento, sexo, rh } = manualForm
+    if (!cedula || !nombres || !apellidos || !fechaNacimiento || !sexo) return
     setManualSaving(true)
     setManualError('')
     try {
-      const dup = await checkDuplicado(eventoId, manualForm.cedula.trim())
-      if (dup) { setManualError('Esta cédula ya está registrada en el evento'); return }
-      const edad = calcEdad(manualForm.fechaNacimiento)
+      const dup = await checkDuplicado(eventoId, cedula.trim())
+      if (dup) { setManualError('Esta cédula ya está registrada en este evento'); return }
+      const edad = calcEdad(fechaNacimiento)
       await registrarAsistencia(eventoId, {
-        cedula:          manualForm.cedula.trim(),
-        nombres:         manualForm.nombres.trim(),
-        apellidos:       manualForm.apellidos.trim(),
-        fechaNacimiento: manualForm.fechaNacimiento,
+        cedula:          cedula.trim(),
+        nombres:         capitalize(nombres.trim()),
+        apellidos:       capitalize(apellidos.trim()),
+        fechaNacimiento,
         edad,
-        sexo:            manualForm.sexo as 'M' | 'F',
-        rh:              manualForm.rh.trim() || undefined,
+        sexo:            sexo as 'M' | 'F',
+        rh:              rh.trim() || undefined,
         modo:            'MANUAL',
       })
       const t = await getTotalAsistencias(eventoId)
       setTotal(t)
-      setLastReg(`${manualForm.apellidos} ${manualForm.nombres}`)
+      const nombre = `${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`
+      setLastReg(nombre)
       setShowManual(false)
       setManualForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
-      setBanner({ type: 'ok', msg: `✅ ${manualForm.apellidos} ${manualForm.nombres} — ${edad} años` })
+      setBanner({ type: 'ok', msg: `✅ ${nombre} — ${edad} años` })
       setTimeout(() => setBanner(null), 3000)
     } catch (err: unknown) {
       setManualError((err as { message?: string }).message ?? 'Error al guardar')
@@ -404,7 +517,7 @@ export default function ScannerPage() {
     }
   }
 
-  // ── Camera error screen ───────────────────────────────────────────────────
+  // ── Camera error ──────────────────────────────────────────────────────────
 
   if (camError) {
     return (
@@ -428,106 +541,108 @@ export default function ScannerPage() {
 
   return (
     <div className="fixed inset-0 bg-black z-50 overflow-hidden select-none">
-      {/* Camera video */}
+      {/* Live camera */}
       <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" autoPlay playsInline muted />
 
-      {/* Hidden canvas */}
+      {/* Canvas (hidden — used for frame capture) */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* ── Scan window overlay ─────────────────────────────────────────── */}
+      {/* ── Scan window ─────────────────────────────────────────────────── */}
       <div className="absolute inset-0 pointer-events-none">
         <div
           style={{
             position:  'absolute',
-            top:       '50%',
-            left:      '50%',
+            top: '50%', left: '50%',
             transform: 'translate(-50%, -60%)',
             width:     'min(88vw, 380px)',
             height:    'min(56vw, 240px)',
             boxShadow: '0 0 0 9999px rgba(0,0,0,0.65)',
             borderRadius: 10,
-            border:    '1.5px solid rgba(255,255,255,0.25)',
+            border: '1.5px solid rgba(255,255,255,0.28)',
           }}
         >
-          {/* Corner marks */}
           {(['top-0 left-0 border-t-2 border-l-2 rounded-tl',
              'top-0 right-0 border-t-2 border-r-2 rounded-tr',
              'bottom-0 left-0 border-b-2 border-l-2 rounded-bl',
              'bottom-0 right-0 border-b-2 border-r-2 rounded-br'] as const)
             .map((cls, i) => (
-              <div key={i} className={`absolute w-6 h-6 border-white ${cls}`} />
+              <div key={i} className={`absolute w-7 h-7 border-white ${cls}`} />
             ))}
         </div>
-        {/* Hint under window */}
+
+        {/* Mode hint */}
         <p
           className="absolute w-full text-center text-white/55 text-xs px-8"
-          style={{ top: '50%', transform: 'translateY(calc(-60% + min(29vw, 125px) + 12px))' }}
+          style={{ top: '50%', transform: 'translateY(calc(-60% + min(29vw, 125px) + 14px))' }}
         >
           {mode === 'PDF417'
-            ? 'Cédula VIEJA — apunta al FRENTE (código de barras)'
-            : 'Cédula NUEVA — apunta al REVERSO (zona >>><<<)'}
+            ? 'Cédula VIEJA — apunta al reverso (código de barras)'
+            : 'Cédula NUEVA — apunta al reverso (zona >>><<<)'}
         </p>
       </div>
 
-      {/* ── Top bar ──────────────────────────────────────────────────────── */}
+      {/* ── Top bar ───────────────────────────────────────────────────────── */}
       <div className="absolute top-0 inset-x-0 z-10 flex items-start justify-between px-4 pt-10 pb-4">
         {/* Back + event info */}
         <div className="flex items-start gap-2">
-          <button onClick={() => router.back()}
-            className="w-10 h-10 rounded-full bg-black/55 backdrop-blur-md flex items-center justify-center text-white shrink-0">
-            ←
+          <button
+            onClick={() => router.back()}
+            className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white shrink-0 text-lg"
+          >
+            ‹
           </button>
-          <div className="bg-black/55 backdrop-blur-md rounded-2xl px-3 py-2 max-w-[55vw]">
+          <div className="bg-black/60 backdrop-blur-md rounded-2xl px-3 py-2 max-w-[55vw]">
             <p className="text-white font-semibold text-sm leading-tight truncate">{evento?.nombre ?? '…'}</p>
-            <p className="text-zinc-400 text-xs mt-0.5">
-              {total} registrado{total !== 1 ? 's' : ''}
-            </p>
+            <p className="text-zinc-400 text-xs mt-0.5">{total} registrado{total !== 1 ? 's' : ''}</p>
           </div>
         </div>
 
-        {/* Right: OCR indicator + torch */}
-        <div className="flex items-center gap-2">
+        {/* OCR indicator + torch */}
+        <div className="flex items-center gap-2 mt-1">
           <div
-            className={`w-2 h-2 rounded-full mt-4 ${mrzReady ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
+            className={`w-2 h-2 rounded-full ${mrzReady ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
             title={mrzReady ? 'OCR listo' : 'Cargando OCR…'}
           />
-          {/* Always show torch button — attempt toggle, fail silently */}
           <button
             onClick={toggleTorch}
             className={`w-11 h-11 rounded-full backdrop-blur-md flex items-center justify-center text-xl transition-all active:scale-90 ${
-              torchOn ? 'bg-yellow-400/90 text-black' : 'bg-black/55 text-white'
-            } ${!hasTorch ? 'opacity-40' : ''}`}
-            title={hasTorch ? 'Linterna' : 'Linterna (no soportada)'}
+              torchOn ? 'bg-yellow-400/90 text-black' : 'bg-black/60 text-white'
+            } ${!hasTorch ? 'opacity-40 pointer-events-none' : ''}`}
+            title={hasTorch ? 'Linterna' : 'Linterna (no disponible)'}
           >
             ⚡
           </button>
         </div>
       </div>
 
-      {/* ── Bottom bar ───────────────────────────────────────────────────── */}
+      {/* ── Bottom bar ────────────────────────────────────────────────────── */}
       <div className="absolute bottom-0 inset-x-0 z-10 px-4 pt-4 pb-8 bg-gradient-to-t from-black/85 via-black/40 to-transparent">
-        {/* Mode + flash + manual */}
         <div className="flex gap-2 mb-3">
+          {/* Mode: Frente (PDF417) */}
           <button
             onClick={() => setMode('PDF417')}
             className={`flex-1 py-3.5 rounded-2xl text-sm font-semibold transition-all active:scale-95 ${
               mode === 'PDF417'
                 ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/40'
-                : 'bg-white/10 text-white/70 hover:bg-white/15'
+                : 'bg-white/10 text-white/70'
             }`}
           >
-            Frente
+            Vieja (PDF417)
           </button>
+
+          {/* Mode: Reverso (MRZ) */}
           <button
             onClick={() => setMode('MRZ')}
             className={`flex-1 py-3.5 rounded-2xl text-sm font-semibold transition-all active:scale-95 ${
               mode === 'MRZ'
                 ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/40'
-                : 'bg-white/10 text-white/70 hover:bg-white/15'
+                : 'bg-white/10 text-white/70'
             }`}
           >
-            Reverso
+            Nueva (MRZ)
           </button>
+
+          {/* Flash */}
           <button
             onClick={toggleTorch}
             className={`w-14 py-3.5 rounded-2xl text-base font-bold transition-all active:scale-95 ${
@@ -537,6 +652,8 @@ export default function ScannerPage() {
           >
             ⚡
           </button>
+
+          {/* Manual entry */}
           <button
             onClick={() => setShowManual(true)}
             className="w-14 py-3.5 rounded-2xl text-base bg-white/10 text-white/70 hover:bg-white/15 transition-all active:scale-95"
@@ -546,6 +663,11 @@ export default function ScannerPage() {
           </button>
         </div>
 
+        {/* Both modes always active indicator */}
+        <p className="text-center text-white/35 text-[11px] mb-1">
+          PDF417 + OCR activos simultáneamente
+        </p>
+
         {lastReg && (
           <p className="text-center text-zinc-400 text-xs truncate">
             Último: <span className="text-white/90">{lastReg}</span>
@@ -553,23 +675,21 @@ export default function ScannerPage() {
         )}
       </div>
 
-      {/* ── Saving spinner ────────────────────────────────────────────────── */}
+      {/* ── Saving spinner ─────────────────────────────────────────────────── */}
       {saving && (
         <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-          <div className="w-14 h-14 rounded-full border-2 border-white/20 border-t-white animate-spin" />
+          <div className="w-16 h-16 rounded-full border-2 border-white/20 border-t-white animate-spin" />
         </div>
       )}
 
-      {/* ── Banner ────────────────────────────────────────────────────────── */}
+      {/* ── Result banner ──────────────────────────────────────────────────── */}
       {banner && (
         <div className="absolute inset-x-5 z-30" style={{ top: '50%', transform: 'translateY(-50%)' }}>
           <div
             className={`rounded-2xl px-6 py-5 text-center shadow-2xl ${
-              banner.type === 'ok'
-                ? 'bg-emerald-600 text-white'
-                : banner.type === 'dup'
-                ? 'bg-amber-500 text-white'
-                : 'bg-red-600 text-white'
+              banner.type === 'ok'  ? 'bg-emerald-600 text-white' :
+              banner.type === 'dup' ? 'bg-amber-500 text-white'   :
+                                      'bg-red-600 text-white'
             }`}
           >
             <p className="font-bold text-lg leading-snug">{banner.msg}</p>
@@ -577,15 +697,17 @@ export default function ScannerPage() {
         </div>
       )}
 
-      {/* ── Manual modal ──────────────────────────────────────────────────── */}
+      {/* ── Manual modal ───────────────────────────────────────────────────── */}
       {showManual && (
         <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center">
           <div className="absolute inset-0 bg-black/70" onClick={() => setShowManual(false)} />
           <div className="relative w-full max-w-md bg-[#18181b] border border-[#27272a] rounded-t-3xl sm:rounded-2xl p-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h2 className="font-semibold text-white text-base">Registrar manualmente</h2>
-              <button onClick={() => setShowManual(false)}
-                className="w-8 h-8 rounded-lg bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition">
+              <button
+                onClick={() => { setShowManual(false); setManualError('') }}
+                className="w-8 h-8 rounded-lg bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition"
+              >
                 ✕
               </button>
             </div>
@@ -593,41 +715,57 @@ export default function ScannerPage() {
             <form onSubmit={handleManual} className="space-y-3">
               <div>
                 <label className="block text-xs text-zinc-400 mb-1.5">Número de cédula *</label>
-                <input required inputMode="numeric"
+                <input
+                  required inputMode="numeric"
                   value={manualForm.cedula}
                   onChange={e => setManualForm(f => ({ ...f, cedula: e.target.value }))}
-                  placeholder="1234567890" className={FIELD_M} />
+                  placeholder="1234567890"
+                  className={FIELD_M}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1.5">Nombres *</label>
-                  <input required value={manualForm.nombres}
+                  <input
+                    required
+                    value={manualForm.nombres}
                     onChange={e => setManualForm(f => ({ ...f, nombres: e.target.value }))}
-                    placeholder="Juan" className={FIELD_M} />
+                    placeholder="Juan"
+                    className={FIELD_M}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1.5">Apellidos *</label>
-                  <input required value={manualForm.apellidos}
+                  <input
+                    required
+                    value={manualForm.apellidos}
                     onChange={e => setManualForm(f => ({ ...f, apellidos: e.target.value }))}
-                    placeholder="García" className={FIELD_M} />
+                    placeholder="García"
+                    className={FIELD_M}
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1.5">Fecha nacimiento *</label>
-                  <input required type="date"
+                  <input
+                    required type="date"
                     value={manualForm.fechaNacimiento}
                     onChange={e => setManualForm(f => ({ ...f, fechaNacimiento: e.target.value }))}
-                    className={`${FIELD_M} [color-scheme:dark]`} />
+                    className={`${FIELD_M} [color-scheme:dark]`}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1.5">Sexo *</label>
-                  <select required value={manualForm.sexo}
+                  <select
+                    required
+                    value={manualForm.sexo}
                     onChange={e => setManualForm(f => ({ ...f, sexo: e.target.value as 'M' | 'F' | '' }))}
-                    className={`${FIELD_M} [color-scheme:dark]`}>
-                    <option value="">Seleccionar</option>
+                    className={`${FIELD_M} [color-scheme:dark]`}
+                  >
+                    <option value="">—</option>
                     <option value="M">Masculino</option>
                     <option value="F">Femenino</option>
                   </select>
@@ -642,9 +780,12 @@ export default function ScannerPage() {
 
               <div>
                 <label className="block text-xs text-zinc-400 mb-1.5">RH (opcional)</label>
-                <input value={manualForm.rh}
+                <input
+                  value={manualForm.rh}
                   onChange={e => setManualForm(f => ({ ...f, rh: e.target.value }))}
-                  placeholder="O+" className={FIELD_M} />
+                  placeholder="O+"
+                  className={FIELD_M}
+                />
               </div>
 
               {manualError && (
@@ -654,12 +795,18 @@ export default function ScannerPage() {
               )}
 
               <div className="flex gap-3 pt-1">
-                <button type="button" onClick={() => setShowManual(false)}
-                  className="flex-1 py-3 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                <button
+                  type="button"
+                  onClick={() => { setShowManual(false); setManualError('') }}
+                  className="flex-1 py-3 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+                >
                   Cancelar
                 </button>
-                <button type="submit" disabled={manualSaving}
-                  className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-60 transition flex items-center justify-center gap-2">
+                <button
+                  type="submit"
+                  disabled={manualSaving}
+                  className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-60 transition flex items-center justify-center gap-2"
+                >
                   {manualSaving
                     ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Guardando…</>
                     : 'Registrar'}
