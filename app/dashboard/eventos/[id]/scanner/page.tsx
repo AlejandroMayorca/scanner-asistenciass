@@ -35,7 +35,7 @@ interface Cedula {
   nombres: string
   apellidos: string
   sexo?: 'M' | 'F'
-  fechaNacimiento?: string // YYYY-MM-DD
+  fechaNacimiento?: string
   edad?: number
   rh?: string
   modo: 'PDF417' | 'MRZ'
@@ -48,7 +48,6 @@ interface Cedula {
 const RS = '\x1e'
 
 function parseFechaPdf(raw: string): { fechaNacimiento: string; edad: number } | null {
-  // Accepts YYYYMMDD or YYYY-MM-DD or YYYY/MM/DD
   const m = raw.replace(/\D/g, '')
   if (m.length !== 8) return null
   const y = m.slice(0, 4), mo = m.slice(4, 6), d = m.slice(6, 8)
@@ -63,9 +62,8 @@ function cleanNamePdf(s: string): string {
 }
 
 function parsePdf417(raw: string): Cedula | null {
-  if (!raw || raw.length < 5) return null
+  if (!raw || raw.length < 10) return null
 
-  // ── Primary: \x1E separator ──────────────────────────────────────────────
   if (raw.includes(RS)) {
     const f = raw.split(RS).map(s => s.trim())
     if (f.length >= 4) {
@@ -81,7 +79,6 @@ function parsePdf417(raw: string): Cedula | null {
     }
   }
 
-  // ── Fallback: ; | \n separators ──────────────────────────────────────────
   for (const sep of [';', '|', '\n']) {
     if (!raw.includes(sep)) continue
     const fields = raw.split(sep).map(s => s.trim()).filter(Boolean)
@@ -104,16 +101,14 @@ function parsePdf417(raw: string): Cedula | null {
 }
 
 // ── MRZ parser ────────────────────────────────────────────────────────────────
-// Cédula nueva — reverso — formato ICCOL (TD1 Colombia)
+// Cédula nueva — ICCOL (TD1 Colombia)
+// Línea 1: ICCOL...
+// Línea 2: YYMMDD + check + sexo + ... + COL + cédula + ...
+// Línea 3: APELLIDOS<<NOMBRES
 //
-// Línea 1: ICCOL + cédula(9) + checkDigit + ...  total 30 chars
-// Línea 2: YYMMDD + checkDigit + sexo(M/F) + fechaExp(6) + checkDigit + COL + ...  total 30 chars
-// Línea 3: APELLIDO1<APELLIDO2<<NOMBRE1<NOMBRE2<<  total 30 chars
-//
-// Ejemplo real:
-//   ICCOL023442784819001<<<<<<<<
-//   0503291M3306149COL1077721837<6
-//   MAYORCA<SOTO<<ALEJANDRO<<<<<
+// Ejemplo: ICCOL023442784819001<<<<<<<<
+//          0503291M3306149COL1077721837<6   ← cédula = "1077721837" (después de COL)
+//          MAYORCA<SOTO<<ALEJANDRO<<<<<
 
 function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } | null {
   if (!/^\d{6}$/.test(yymmdd)) return null
@@ -122,7 +117,6 @@ function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } 
   const dd = parseInt(yymmdd.slice(4, 6))
   if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null
   const now = new Date()
-  // Two-digit year: > current year → 1900s, else 2000s
   const fullYear = (2000 + yy) > now.getFullYear() ? 1900 + yy : 2000 + yy
   let edad = now.getFullYear() - fullYear
   if (now.getMonth() + 1 < mm || (now.getMonth() + 1 === mm && now.getDate() < dd)) edad--
@@ -133,21 +127,16 @@ function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } 
 }
 
 function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
-  // ── Cédula: line 2, digits immediately after "COL" ───────────────────────
-  // Example line 2: 0503291M3306149COL1077721837<6  →  cedula = "1077721837"
+  // Cédula: digits immediately after "COL" in line 2
   const colIdx = l2.indexOf('COL')
   if (colIdx < 0) return null
   const cedula = l2.slice(colIdx + 3).match(/^\d+/)?.[0] ?? ''
   if (cedula.length < 5) return null
 
-  // ── Date of birth: line 2, positions 0–5 ─────────────────────────────────
   const dob  = parseDobMrz(l2.slice(0, 6))
-
-  // ── Sex: line 2, position 7 ───────────────────────────────────────────────
   const sc   = l2[7] ?? ''
   const sexo: 'M' | 'F' | undefined = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
 
-  // ── Names: line 3 — APELLIDOS<<NOMBRES ────────────────────────────────────
   const nameRaw = l3.replace(/<+$/, '')
   const sepIdx  = nameRaw.indexOf('<<')
   let apellidos = '', nombres = ''
@@ -159,21 +148,12 @@ function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
   }
 
   if (!apellidos && !cedula) return null
-
-  return {
-    cedula,
-    nombres,
-    apellidos,
-    sexo,
-    modo: 'MRZ',
-    ...(dob ?? {}),
-  }
+  return { cedula, nombres, apellidos, sexo, modo: 'MRZ', ...(dob ?? {}) }
 }
 
 function parseMrz(ocrText: string): Cedula | null {
   if (!ocrText || ocrText.length < 20) return null
 
-  // Normalize: uppercase, keep only A-Z, 0-9, < and spaces
   const raw   = ocrText.toUpperCase()
   const lines = raw
     .split('\n')
@@ -182,9 +162,8 @@ function parseMrz(ocrText: string): Cedula | null {
 
   if (lines.length === 0) return null
 
-  // ── Strategy 1: find line 1 by ICCOL / IDCOL prefix ─────────────────────
-  const l1Candidates = ['ICCOL', 'IDCOL', 'IC<COL', 'ID<COL', 'ICCOL']
-  for (const prefix of l1Candidates) {
+  // Strategy 1: find line 1 by ICCOL / IDCOL prefix
+  for (const prefix of ['ICCOL', 'IDCOL', 'IC<COL', 'ID<COL']) {
     const l1i = lines.findIndex(l => l.startsWith(prefix))
     if (l1i >= 0 && l1i + 2 < lines.length) {
       const result = parseMrzLines(
@@ -196,8 +175,7 @@ function parseMrz(ocrText: string): Cedula | null {
     }
   }
 
-  // ── Strategy 2: find line 2 by date+sex pattern ───────────────────────────
-  // Pattern: 6 digits + any digit + M or F
+  // Strategy 2: find line 2 by date+sex pattern
   const l2i = lines.findIndex(l => /^\d{7}[MF]/.test(l))
   if (l2i > 0 && l2i + 1 < lines.length) {
     const result = parseMrzLines(
@@ -208,7 +186,7 @@ function parseMrz(ocrText: string): Cedula | null {
     if (result) return result
   }
 
-  // ── Strategy 3: find line 3 by << pattern ────────────────────────────────
+  // Strategy 3: find line 3 by << pattern
   const l3i = lines.findIndex(l => l.includes('<<'))
   if (l3i >= 2) {
     const result = parseMrzLines(
@@ -216,15 +194,6 @@ function parseMrz(ocrText: string): Cedula | null {
       lines[l3i - 1].padEnd(30, '<'),
       lines[l3i].padEnd(30, '<'),
     )
-    if (result) return result
-  }
-  // l3 might be the first line with <<
-  if (l3i >= 0 && l3i - 2 < 0) {
-    // Try with partial context — just parse names from line 3
-    const l3 = lines[l3i].padEnd(30, '<')
-    const l2 = l3i > 0 ? lines[l3i - 1].padEnd(30, '<') : '<'.repeat(30)
-    const l1 = l3i > 1 ? lines[l3i - 2].padEnd(30, '<') : '<'.repeat(30)
-    const result = parseMrzLines(l1, l2, l3)
     if (result) return result
   }
 
@@ -253,52 +222,76 @@ const PDF417_HINTS = new Map<DecodeHintType, unknown>([
 // ── Component ─────────────────────────────────────────────────────────────────
 
 type BannerState = { type: 'ok' | 'dup' | 'err'; msg: string }
+type ScanStatus  = 'pdf' | 'mrz' | 'paused'
 
 export default function ScannerPage() {
   const { id: eventoId } = useParams<{ id: string }>()
   const router = useRouter()
 
-  // DOM
+  // DOM refs
   const videoRef  = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Resources
+  // Resource refs (created once at mount)
   const trackRef     = useRef<MediaStreamTrack | null>(null)
   const readerRef    = useRef<BrowserMultiFormatReader | null>(null)
   const tesseractRef = useRef<import('tesseract.js').Worker | null>(null)
 
-  // Scan control
-  const activeRef     = useRef(false)  // camera ready and not paused
-  const processingRef = useRef(false)  // registering a cedula right now
-  const mrzBusyRef    = useRef(false)  // Tesseract is running
-  const mrzReadyRef   = useRef(false)  // Tesseract worker loaded
-  const onDetectedRef = useRef<((c: Cedula) => void) | null>(null)
-  const pdfTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
-  const mrzTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Scan-control refs
+  const activeRef        = useRef(false)   // camera ready + not paused
+  const processingRef    = useRef(false)   // confirmation modal open
+  const mrzBusyRef       = useRef(false)   // Tesseract call in flight
+  const mrzReadyRef      = useRef(false)   // Tesseract worker loaded
+  const mrzActiveRef     = useRef(false)   // MRZ interval running
+  const onDetectedRef    = useRef<((c: Cedula) => void) | null>(null)
+  const pdfTimerRef      = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mrzTimerRef      = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mrzEnableRef     = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startScanningRef = useRef<(() => void) | null>(null)  // set after camera ready
 
   // UI state
-  const [lastMode,   setLastMode]   = useState<'PDF417' | 'MRZ' | null>(null)
-  const [torchOn,    setTorchOn]    = useState(false)
-  const [hasTorch,   setHasTorch]   = useState(false)
-  const [mrzReady,   setMrzReady]   = useState(false)
+  const [scanStatus,    setScanStatus]    = useState<ScanStatus>('pdf')
+  const [torchOn,       setTorchOn]       = useState(false)
+  const [hasTorch,      setHasTorch]      = useState(false)
+  const [mrzReady,      setMrzReady]      = useState(false)
   const [confirmForm,   setConfirmForm]   = useState<ConfirmForm | null>(null)
   const [confirmSaving, setConfirmSaving] = useState(false)
   const [confirmError,  setConfirmError]  = useState('')
   const [banner,        setBanner]        = useState<BannerState | null>(null)
-  const [lastReg,    setLastReg]    = useState('')
-  const [total,      setTotal]      = useState(0)
-  const [evento,     setEvento]     = useState<Evento | null>(null)
-  const [camError,   setCamError]   = useState<string | null>(null)
-  const [showManual, setShowManual] = useState(false)
-  const [manualForm, setManualForm] = useState({
+  const [lastReg,       setLastReg]       = useState('')
+  const [total,         setTotal]         = useState(0)
+  const [evento,        setEvento]        = useState<Evento | null>(null)
+  const [camError,      setCamError]      = useState<string | null>(null)
+  const [showManual,    setShowManual]    = useState(false)
+  const [manualForm,    setManualForm]    = useState({
     cedula: '', nombres: '', apellidos: '',
     fechaNacimiento: '', sexo: '' as 'M' | 'F' | '', rh: '',
   })
   const [manualSaving, setManualSaving] = useState(false)
   const [manualError,  setManualError]  = useState('')
 
-  // Keep mrzReadyRef in sync
   useEffect(() => { mrzReadyRef.current = mrzReady }, [mrzReady])
+
+  // ── reiniciarScanner ──────────────────────────────────────────────────────
+  // Clears all timers, resets scanning state, waits 500ms, then restarts.
+
+  const reiniciarScanner = useCallback(() => {
+    if (pdfTimerRef.current)  { clearInterval(pdfTimerRef.current);  pdfTimerRef.current  = null }
+    if (mrzTimerRef.current)  { clearInterval(mrzTimerRef.current);  mrzTimerRef.current  = null }
+    if (mrzEnableRef.current) { clearTimeout(mrzEnableRef.current);  mrzEnableRef.current = null }
+
+    processingRef.current = false
+    mrzActiveRef.current  = false
+    mrzBusyRef.current    = false
+    activeRef.current     = true
+    setConfirmForm(null)
+    setConfirmError('')
+    setScanStatus('pdf')
+
+    setTimeout(() => {
+      startScanningRef.current?.()
+    }, 500)
+  }, [])
 
   // ── handleDetected ────────────────────────────────────────────────────────
 
@@ -306,7 +299,7 @@ export default function ScannerPage() {
     if (processingRef.current || !activeRef.current) return
     processingRef.current = true
     activeRef.current = false
-    setLastMode(c.modo)
+    setScanStatus('paused')
     setConfirmForm({
       cedula:          c.cedula,
       nombres:         c.nombres,
@@ -319,6 +312,8 @@ export default function ScannerPage() {
   }, [])
 
   useEffect(() => { onDetectedRef.current = handleDetected }, [handleDetected])
+
+  // ── handleConfirm ─────────────────────────────────────────────────────────
 
   const handleConfirm = async () => {
     if (!confirmForm) return
@@ -351,8 +346,7 @@ export default function ScannerPage() {
       setConfirmForm(null)
       setTimeout(() => {
         setBanner(null)
-        processingRef.current = false
-        activeRef.current = true
+        reiniciarScanner()
       }, 3000)
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string }
@@ -362,12 +356,7 @@ export default function ScannerPage() {
     }
   }
 
-  const handleCancelConfirm = () => {
-    setConfirmForm(null)
-    setConfirmError('')
-    processingRef.current = false
-    activeRef.current = true
-  }
+  const handleCancelConfirm = () => { reiniciarScanner() }
 
   // ── Tesseract init ────────────────────────────────────────────────────────
 
@@ -378,15 +367,13 @@ export default function ScannerPage() {
         const { createWorker } = await import('tesseract.js')
         const w = await createWorker('eng', 1, { logger: () => {} })
         await w.setParameters({
-          // Include '<' — it's the MRZ filler and field separator
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<' as any,
-          // PSM 6: uniform block of text — best for MRZ
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tessedit_pageseg_mode: '6' as any,
         })
         if (alive) { tesseractRef.current = w; setMrzReady(true) }
-      } catch { /* Tesseract failed to load — OCR will be unavailable */ }
+      } catch { /* OCR unavailable */ }
     })()
     return () => {
       alive = false
@@ -394,9 +381,10 @@ export default function ScannerPage() {
     }
   }, [])
 
-  // ── Camera + parallel scan intervals ─────────────────────────────────────
-  // Both PDF417 and MRZ always run simultaneously.
-  // The first one to detect a valid cedula wins (processingRef prevents double-fire).
+  // ── Camera + sequential scan ──────────────────────────────────────────────
+  // Step 1 — PDF417 at 400ms
+  // Step 2 — after 3s with no hit, also run MRZ Tesseract at 1200ms
+  // Detection → pause both → show confirmation → reiniciarScanner() on done
 
   useEffect(() => {
     let alive = true
@@ -412,7 +400,6 @@ export default function ScannerPage() {
         const track = stream.getVideoTracks()[0]
         trackRef.current = track
 
-        // Torch support detection
         const caps = track.getCapabilities?.() as Record<string, unknown> | undefined
         if (caps && 'torch' in caps) {
           setHasTorch(true)
@@ -435,7 +422,6 @@ export default function ScannerPage() {
 
         activeRef.current = true
 
-        // Draws current video frame to shared canvas. Returns true if video is ready.
         const drawFrame = (): boolean => {
           if (!alive) return false
           if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return false
@@ -445,44 +431,60 @@ export default function ScannerPage() {
           return true
         }
 
-        // ── PDF417 interval: 400ms ──────────────────────────────────────────
-        pdfTimerRef.current = setInterval(() => {
-          if (!alive || processingRef.current || !activeRef.current) return
-          if (!drawFrame()) return
-          try {
-            const result = reader.decodeFromCanvas(canvas)
-            const parsed = parsePdf417(result.getText())
-            if (parsed) onDetectedRef.current?.(parsed)
-          } catch {
-            // ZXing throws NotFoundException on every frame without a barcode — expected
-          } finally {
-            // Reset ZXing internal state to avoid stale decode artifacts
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ;(reader as any).reader?.reset?.()
-          }
-        }, 400)
+        const startScanning = () => {
+          // Clear any already-running timers (handles restarts)
+          if (pdfTimerRef.current)  { clearInterval(pdfTimerRef.current);  pdfTimerRef.current  = null }
+          if (mrzTimerRef.current)  { clearInterval(mrzTimerRef.current);  mrzTimerRef.current  = null }
+          if (mrzEnableRef.current) { clearTimeout(mrzEnableRef.current);  mrzEnableRef.current = null }
 
-        // ── MRZ (Tesseract) interval: 1200ms ────────────────────────────────
-        // Processes full frame — MRZ may be anywhere in the camera view.
-        mrzTimerRef.current = setInterval(async () => {
-          if (!alive || processingRef.current || !activeRef.current) return
-          if (!tesseractRef.current || !mrzReadyRef.current) return
-          if (mrzBusyRef.current) return  // previous OCR still running
-          if (!drawFrame()) return
+          mrzActiveRef.current = false
+          setScanStatus('pdf')
 
-          mrzBusyRef.current = true
-          try {
-            // Tesseract captures the canvas pixel data immediately on call,
-            // so subsequent PDF417 redraws don't affect this recognition.
-            const { data: { text } } = await tesseractRef.current.recognize(canvas)
-            const parsed = parseMrz(text)
-            if (parsed) onDetectedRef.current?.(parsed)
-          } catch {
-            // OCR error — ignore
-          } finally {
-            mrzBusyRef.current = false
-          }
-        }, 1200)
+          // ── Step 1: PDF417 only ──────────────────────────────────────────
+          pdfTimerRef.current = setInterval(() => {
+            if (!alive || processingRef.current || !activeRef.current) return
+            if (!drawFrame()) return
+            try {
+              const result = reader.decodeFromCanvas(canvas)
+              const text   = result.getText()
+              if (text && text.length > 10) {
+                const parsed = parsePdf417(text)
+                if (parsed) onDetectedRef.current?.(parsed)
+              }
+            } catch {
+              // ZXing NotFoundException — expected on every frame without barcode
+            }
+          }, 400)
+
+          // ── Step 2: add MRZ after 3 s of no PDF417 detection ────────────
+          mrzEnableRef.current = setTimeout(() => {
+            if (!alive || processingRef.current || !activeRef.current) return
+            mrzActiveRef.current = true
+            setScanStatus('mrz')
+
+            mrzTimerRef.current = setInterval(async () => {
+              if (!alive || processingRef.current || !activeRef.current) return
+              if (!mrzActiveRef.current || !mrzReadyRef.current || mrzBusyRef.current) return
+              if (!drawFrame()) return
+
+              mrzBusyRef.current = true
+              try {
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+                const { data: { text } } = await tesseractRef.current!.recognize(dataUrl)
+                const parsed = parseMrz(text)
+                if (parsed) onDetectedRef.current?.(parsed)
+              } catch {
+                // OCR error — ignore
+              } finally {
+                mrzBusyRef.current = false
+              }
+            }, 1200)
+          }, 3000)
+        }
+
+        // Expose startScanning so reiniciarScanner can call it
+        startScanningRef.current = startScanning
+        startScanning()
 
       } catch {
         if (alive) setCamError('No se pudo acceder a la cámara. Verifica los permisos.')
@@ -491,8 +493,9 @@ export default function ScannerPage() {
 
     return () => {
       alive = false
-      if (pdfTimerRef.current) clearInterval(pdfTimerRef.current)
-      if (mrzTimerRef.current) clearInterval(mrzTimerRef.current)
+      if (pdfTimerRef.current)  clearInterval(pdfTimerRef.current)
+      if (mrzTimerRef.current)  clearInterval(mrzTimerRef.current)
+      if (mrzEnableRef.current) clearTimeout(mrzEnableRef.current)
       trackRef.current?.stop()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -609,18 +612,19 @@ export default function ScannerPage() {
             ))}
         </div>
 
-        {/* Hint */}
+        {/* Status hint below the scan frame */}
         <p
-          className="absolute w-full text-center text-white/55 text-xs px-8"
+          className="absolute w-full text-center text-white/50 text-xs px-8"
           style={{ top: '50%', transform: 'translateY(calc(-60% + min(29vw, 125px) + 14px))' }}
         >
-          Cédula vieja o nueva — apunta al reverso
+          {scanStatus === 'pdf'    ? 'Buscando código de barras…' :
+           scanStatus === 'mrz'   ? 'Leyendo texto MRZ…' :
+                                    'Pausado — confirma o cancela'}
         </p>
       </div>
 
       {/* ── Top bar ───────────────────────────────────────────────────────── */}
       <div className="absolute top-0 inset-x-0 z-10 flex items-start justify-between px-4 pt-10 pb-4">
-        {/* Back + event info */}
         <div className="flex items-start gap-2">
           <button
             onClick={() => router.back()}
@@ -634,12 +638,21 @@ export default function ScannerPage() {
           </div>
         </div>
 
-        {/* OCR indicator + torch */}
+        {/* Scanning indicator dot + torch */}
         <div className="flex items-center gap-2 mt-1">
           <div
-            className={`w-2 h-2 rounded-full ${mrzReady ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
-            title={mrzReady ? 'OCR listo' : 'Cargando OCR…'}
+            className={`w-2.5 h-2.5 rounded-full transition-colors ${
+              scanStatus === 'paused' ? 'bg-zinc-600' :
+              scanStatus === 'mrz'   ? 'bg-purple-400 animate-pulse' :
+                                       'bg-emerald-400 animate-pulse'
+            }`}
+            title={
+              scanStatus === 'paused' ? 'Pausado' :
+              scanStatus === 'mrz'   ? 'Leyendo MRZ' :
+                                       'Buscando código PDF417'
+            }
           />
+          {!mrzReady && <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Cargando OCR…" />}
           <button
             onClick={toggleTorch}
             className={`w-11 h-11 rounded-full backdrop-blur-md flex items-center justify-center text-xl transition-all active:scale-90 ${
@@ -655,16 +668,18 @@ export default function ScannerPage() {
       {/* ── Bottom bar ────────────────────────────────────────────────────── */}
       <div className="absolute bottom-0 inset-x-0 z-10 px-4 pt-4 pb-8 bg-gradient-to-t from-black/85 via-black/40 to-transparent">
         <div className="flex gap-2 mb-3">
-          {/* Last-detected mode badge (read-only) */}
-          <div className="flex-1 flex items-center justify-center py-3.5 rounded-2xl bg-white/5 border border-white/10 gap-2">
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-              lastMode === 'PDF417' ? 'bg-blue-500/30 text-blue-300' :
-              lastMode === 'MRZ'   ? 'bg-purple-500/30 text-purple-300' :
-                                     'bg-white/10 text-white/30'
-            }`}>
-              {lastMode ?? '—'}
+          {/* Scan status display */}
+          <div className="flex-1 flex items-center justify-center py-3.5 rounded-2xl bg-white/5 border border-white/8 gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+              scanStatus === 'paused' ? 'bg-zinc-500' :
+              scanStatus === 'mrz'   ? 'bg-purple-400 animate-pulse' :
+                                       'bg-emerald-400 animate-pulse'
+            }`} />
+            <span className="text-white/50 text-xs">
+              {scanStatus === 'pdf'  ? 'Buscando código de barras…' :
+               scanStatus === 'mrz' ? 'Leyendo texto MRZ…' :
+                                      'Pausado'}
             </span>
-            <span className="text-white/40 text-xs">detectado</span>
           </div>
 
           {/* Flash */}
@@ -688,10 +703,6 @@ export default function ScannerPage() {
           </button>
         </div>
 
-        <p className="text-center text-white/35 text-[11px] mb-1">
-          PDF417 + MRZ activos simultáneamente
-        </p>
-
         {lastReg && (
           <p className="text-center text-zinc-400 text-xs truncate">
             Último: <span className="text-white/90">{lastReg}</span>
@@ -702,13 +713,11 @@ export default function ScannerPage() {
       {/* ── Result banner ──────────────────────────────────────────────────── */}
       {banner && (
         <div className="absolute inset-x-5 z-30" style={{ top: '50%', transform: 'translateY(-50%)' }}>
-          <div
-            className={`rounded-2xl px-6 py-5 text-center shadow-2xl ${
-              banner.type === 'ok'  ? 'bg-emerald-600 text-white' :
-              banner.type === 'dup' ? 'bg-amber-500 text-white'   :
-                                      'bg-red-600 text-white'
-            }`}
-          >
+          <div className={`rounded-2xl px-6 py-5 text-center shadow-2xl ${
+            banner.type === 'ok'  ? 'bg-emerald-600 text-white' :
+            banner.type === 'dup' ? 'bg-amber-500 text-white'   :
+                                    'bg-red-600 text-white'
+          }`}>
             <p className="font-bold text-lg leading-snug">{banner.msg}</p>
           </div>
         </div>
