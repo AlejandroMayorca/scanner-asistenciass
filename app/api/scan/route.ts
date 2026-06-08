@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       const lum = toLuminances(base.bitmap as JimpBitmap)
       const text = tryDecode(lum, W, H)
       if (text) {
-        logs.push(`[srv] OK original: "${text.slice(0, 60)}"`)
+        logs.push(`[srv] OK original: "${text}"`)
         return NextResponse.json({ success: true, text, attempt: 'original', logs })
       }
       logs.push('[srv] original: sin detección')
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       const lum  = toLuminances(img2.bitmap as JimpBitmap)
       const text = tryDecode(lum, W, H)
       if (text) {
-        logs.push(`[srv] OK contraste: "${text.slice(0, 60)}"`)
+        logs.push(`[srv] OK contraste: "${text}"`)
         return NextResponse.json({ success: true, text, attempt: 'contraste', logs })
       }
       logs.push('[srv] contraste: sin detección')
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
       const lum  = toLuminances(img3.bitmap as JimpBitmap)
       const text = tryDecode(lum, W, sh)
       if (text) {
-        logs.push(`[srv] OK inferior: "${text.slice(0, 60)}"`)
+        logs.push(`[srv] OK inferior: "${text}"`)
         return NextResponse.json({ success: true, text, attempt: 'inferior', logs })
       }
       logs.push('[srv] inferior: sin detección')
@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
       const lum  = toLuminances(img4.bitmap as JimpBitmap)
       const text = tryDecode(lum, W, sh)
       if (text) {
-        logs.push(`[srv] OK inf+contraste: "${text.slice(0, 60)}"`)
+        logs.push(`[srv] OK inf+contraste: "${text}"`)
         return NextResponse.json({ success: true, text, attempt: 'inf+contraste', logs })
       }
       logs.push('[srv] inf+contraste: sin detección')
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
       const lum  = toLuminances(img5.bitmap as JimpBitmap)
       const text = tryDecode(lum, W, H)
       if (text) {
-        logs.push(`[srv] OK invertido: "${text.slice(0, 60)}"`)
+        logs.push(`[srv] OK invertido: "${text}"`)
         return NextResponse.json({ success: true, text, attempt: 'invertido', logs })
       }
       logs.push('[srv] invertido: sin detección')

@@ -44,6 +44,7 @@ interface ConfirmForm {
   fechaNacimiento: string
   rh: string
   modo: 'PDF417' | 'MRZ' | 'MANUAL'
+  rawText?: string
 }
 
 type ToastState = { color: 'red' | 'yellow' | 'green'; msg: string } | null
@@ -83,7 +84,7 @@ function parsePdf417(raw: string): Cedula | null {
       }
     }
   }
-  for (const sep of [';', '\n']) {
+  for (const sep of [';', '|', ',', '\n']) {
     if (!raw.includes(sep)) continue
     const fields = raw.split(sep).map(s => s.trim()).filter(Boolean)
     const ci = fields.findIndex(f => /^\d{6,12}$/.test(f))
@@ -300,6 +301,7 @@ export default function ScannerPage() {
 
       // ── Server-side ZXing ─────────────────────────────────────────────────
       let detected: Cedula | null = null
+      let rawServerText: string | undefined
 
       try {
         addLog('[api] enviando al servidor…')
@@ -313,17 +315,18 @@ export default function ScannerPage() {
           error?: string; logs?: string[]
         }
 
-        // Show server logs
         for (const line of data.logs ?? []) addLog(line)
 
         if (data.success && data.text) {
+          rawServerText = data.text
+          addLog(`[txt] ${data.text}`)
           detected = parseBarcode(data.text)
-          if (!detected) addLog(`[parse] no reconocido: "${data.text.slice(0, 40)}"`)
+          if (!detected) addLog('[parse] separadores estándar fallaron — abriendo raw')
         } else {
           addLog(`[api] sin detección: ${data.error ?? ''}`)
         }
       } catch (fetchErr) {
-        addLog(`[api] error de red: ${String(fetchErr).slice(0, 60)}`)
+        addLog(`[api] error de red: ${String(fetchErr).slice(0, 80)}`)
       }
 
       // ── Tesseract fallback: bottom 45% for MRZ cédula nueva ──────────────
@@ -335,16 +338,33 @@ export default function ScannerPage() {
             ct.width  = cW; ct.height = sh
             ct.getContext('2d')!.drawImage(canvas, 0, sy, cW, sh, 0, 0, cW, sh)
             const { data: { text } } = await tWorkerRef.current.recognize(ct)
-            addLog(`[ocr] "${text.trim().replace(/\n/g, ' ').slice(0, 120)}"`)
+            addLog(`[ocr] ${text.trim()}`)
             detected = parseMrzText(text) ?? parseMrzRegex(text)
             if (detected) addLog(`[ocr OK] ${detected.modo} cédula=${detected.cedula}`)
             else addLog('[ocr] sin resultado')
           } catch (err) {
-            addLog(`[ocr] error: ${String(err).slice(0, 60)}`)
+            addLog(`[ocr] error: ${String(err).slice(0, 80)}`)
           }
         } else {
           addLog(`[ocr] ${tReady ? 'ocupado' : 'iniciando…'}`)
         }
+      }
+
+      // ── If still no parse but server returned raw text → open modal raw ──
+      if (!detected && rawServerText) {
+        const rawCedula = rawServerText.match(/\d{6,12}/)?.[0] ?? ''
+        setConfirmForm({
+          cedula:          rawCedula,
+          nombres:         '',
+          apellidos:       '',
+          sexo:            '',
+          fechaNacimiento: '',
+          rh:              '',
+          modo:            'PDF417',
+          rawText:         rawServerText,
+        })
+        setProcessing(false)
+        return
       }
 
       if (!detected || detected.cedula.length < 5) {
@@ -559,6 +579,14 @@ export default function ScannerPage() {
             </div>
 
             <div className="space-y-3">
+              {confirmForm.rawText && (
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Texto detectado (completa los campos)</label>
+                  <div className="w-full bg-black/60 border border-yellow-500/30 rounded-xl px-3 py-2 text-yellow-300 text-[9px] font-mono break-all leading-relaxed">
+                    {confirmForm.rawText}
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-zinc-400 mb-1.5">Número de cédula</label>
                 <input value={confirmForm.cedula}
