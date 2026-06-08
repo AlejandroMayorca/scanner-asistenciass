@@ -415,22 +415,50 @@ export default function ScannerPage() {
           body:    JSON.stringify({ imageBase64: base64 }),
         })
         const data = await resp.json() as {
-          success: boolean; text?: string; attempt?: string
-          error?: string; logs?: string[]
+          success: boolean
+          text?: string
+          parsed?: {
+            cedula: string; apellido1: string; apellido2: string
+            nombre1: string; nombre2: string; sexo: string
+            fechaNacimiento: string; rh: string
+          }
+          error?: string
+          logs?: string[]
         }
 
         for (const line of data.logs ?? []) addLog(line)
 
         if (data.success && data.text) {
           rawServerText = data.text
-          addLog(`[txt] ${data.text.replace(/\x00/g, '□')}`)
-          addLog(`[pos] ${debugPdf417Positions(data.text)}`)
-          const r1 = parsePdf417Binario(data.text)
-          const r2 = r1 ? null : parsePdf417NullSplit(data.text)
-          const r3 = (r1 || r2) ? null : parsePdf417Legacy(data.text)
-          detected = r1 ?? r2 ?? r3 ?? parseMrzText(data.text) ?? parseMrzRegex(data.text)
-          addLog(`[parse] binario=${r1?'✓':'✗'} nullsplit=${r2?'✓':'✗'} legacy=${r3?'✓':'✗'} → ${detected ? `cedula=${detected.cedula}` : 'sin resultado'}`)
-          if (!detected) addLog('[parse] abriendo modal raw para completar manualmente')
+
+          // ── Python parser succeeded (primary path) ──────────────────────
+          if (data.parsed && data.parsed.cedula) {
+            const p       = data.parsed
+            const nombres   = [p.nombre1, p.nombre2].filter(Boolean).join(' ')
+            const apellidos = [p.apellido1, p.apellido2].filter(Boolean).join(' ')
+            const fnParts   = p.fechaNacimiento?.split('-') ?? []
+            detected = {
+              cedula:    p.cedula,
+              nombres:   cleanName(nombres),
+              apellidos: cleanName(apellidos),
+              sexo:      p.sexo === 'M' || p.sexo === 'F' ? p.sexo as 'M' | 'F' : undefined,
+              rh:        p.rh || undefined,
+              modo:      'PDF417',
+              ...( fnParts.length === 3 ? buildFecha(fnParts[0], fnParts[1], fnParts[2]) ?? {} : {} ),
+            }
+            addLog(`[py✓] ${detected.apellidos} ${detected.nombres} | ${p.cedula} | ${p.fechaNacimiento}`)
+
+          // ── TypeScript fallback parsers ──────────────────────────────────
+          } else {
+            addLog(`[txt] ${data.text.replace(/\x00/g, '□')}`)
+            addLog(`[pos] ${debugPdf417Positions(data.text)}`)
+            const r1 = parsePdf417Binario(data.text)
+            const r2 = r1 ? null : parsePdf417NullSplit(data.text)
+            const r3 = (r1 || r2) ? null : parsePdf417Legacy(data.text)
+            detected = r1 ?? r2 ?? r3 ?? parseMrzText(data.text) ?? parseMrzRegex(data.text)
+            addLog(`[parse] bin=${r1?'✓':'✗'} null=${r2?'✓':'✗'} leg=${r3?'✓':'✗'} → ${detected ? `cedula=${detected.cedula}` : 'sin resultado'}`)
+            if (!detected) addLog('[parse] sin resultado — abriendo modal raw')
+          }
         } else {
           addLog(`[api] sin detección: ${data.error ?? ''}`)
         }
