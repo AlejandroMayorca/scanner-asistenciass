@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, BarChart2, Camera, ClipboardList, FileSpreadsheet,
-  MapPin, Pencil, Trash2, Users,
+  ArrowLeft, BarChart2, Camera, Check, ClipboardList, Copy, FileSpreadsheet,
+  Link2, MapPin, Pencil, Trash2, Users,
 } from 'lucide-react'
-import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, toDate } from '../../../lib/firestore'
+import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, generarTokenAcceso, toDate } from '../../../lib/firestore'
 import { exportarExcel } from '../../../lib/export'
 import { Spinner } from '../../../components/ui/Spinner'
 import type { Evento, Asistencia } from '../../../lib/types'
@@ -63,7 +63,25 @@ function calcStats(asistencias: Asistencia[]) {
 
 // ── Tab: Registrar ─────────────────────────────────────────────────────────────
 
-function RegistrarTab({ eventoId, onRegistered }: { eventoId: string; onRegistered: () => void }) {
+function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; evento: Evento | null; onRegistered: () => void }) {
+  const [localToken, setLocalToken] = useState<string | undefined>()
+  const [copied, setCopied] = useState(false)
+  const [generatingToken, setGeneratingToken] = useState(false)
+  const token = localToken ?? evento?.tokenAcceso ?? undefined
+
+  const handleCopyLink = async () => {
+    if (!token) return
+    const link = `${window.location.origin}/evento/${token}/scanner`
+    try { await navigator.clipboard.writeText(link) } catch { /* ignore */ }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleGenerarToken = async () => {
+    setGeneratingToken(true)
+    try { setLocalToken(await generarTokenAcceso(eventoId)) } finally { setGeneratingToken(false) }
+  }
+
   const [form, setForm] = useState({
     cedula: '', nombres: '', apellidos: '', fechaNacimiento: '',
     sexo: '' as 'M' | 'F' | '', rh: '',
@@ -109,6 +127,38 @@ function RegistrarTab({ eventoId, onRegistered }: { eventoId: string; onRegister
 
   return (
     <div className="max-w-xl">
+      {/* Operator link */}
+      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-4 mb-4">
+        <p className="text-xs text-zinc-400 mb-2.5 font-medium flex items-center gap-1.5">
+          <Link2 size={12} /> Link de operador
+        </p>
+        {token ? (
+          <div className="flex gap-2">
+            <code className="flex-1 text-xs bg-[#0a0a0a] rounded-xl px-3 py-2.5 text-blue-400 truncate font-mono border border-[#27272a]">
+              {`${typeof window !== 'undefined' ? window.location.origin : ''}/evento/${token}/scanner`}
+            </code>
+            <button
+              onClick={handleCopyLink}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition active:scale-95 ${
+                copied
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-white/5 text-zinc-400 hover:text-white border border-[#27272a]'
+              }`}
+            >
+              {copied ? <><Check size={13} /> Copiado</> : <><Copy size={13} /> Copiar</>}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={handleGenerarToken}
+            disabled={generatingToken}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-[#27272a] text-zinc-400 hover:text-white text-xs font-semibold transition active:scale-95 disabled:opacity-60"
+          >
+            {generatingToken ? <><Spinner size="sm" /> Generando…</> : <><Link2 size={13} /> Generar link de operador</>}
+          </button>
+        )}
+      </div>
+
       <Link
         href={`/dashboard/eventos/${eventoId}/scanner`}
         className="flex items-center justify-center gap-3 w-full py-4 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-base transition active:scale-95 mb-6 shadow-lg shadow-blue-600/25"
@@ -320,13 +370,14 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                 <th className="text-left px-4 py-3 font-medium hidden md:table-cell">RH</th>
                 <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Hora</th>
                 <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Modo</th>
+                <th className="text-left px-4 py-3 font-medium hidden xl:table-cell">Registrado por</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-14 text-zinc-600">
+                  <td colSpan={10} className="text-center py-14 text-zinc-600">
                     {search ? 'Sin resultados' : 'Sin asistencias registradas'}
                   </td>
                 </tr>
@@ -357,6 +408,9 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                       }`}>
                         {a.modo}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 hidden xl:table-cell text-zinc-500 text-xs truncate max-w-[120px]">
+                      {a.registradoPor || '—'}
                     </td>
                     <td className="px-2 py-3">
                       <button
@@ -607,7 +661,7 @@ export default function EventoDetailPage() {
 
       {/* Content */}
       <div className="px-4 lg:px-8 py-6 max-w-5xl w-full mx-auto flex-1">
-        {tab === 'registrar'    && <RegistrarTab eventoId={eventoId} onRegistered={refreshTotal} />}
+        {tab === 'registrar'    && <RegistrarTab eventoId={eventoId} evento={evento} onRegistered={refreshTotal} />}
         {tab === 'asistentes'   && <AsistentesTab eventoId={eventoId} evento={evento} />}
         {tab === 'estadisticas' && <EstadisticasTab eventoId={eventoId} />}
       </div>

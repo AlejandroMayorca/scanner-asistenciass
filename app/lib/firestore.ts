@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDoc, getDocs,
-  query, where, orderBy, Timestamp, serverTimestamp, writeBatch,
+  query, where, orderBy, limit, Timestamp, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
 import type { Evento, Asistencia, UserProfile } from './types'
@@ -39,8 +39,24 @@ export async function crearEvento(
     creadoPor: uid,
     activo: true,
     creadoEn: serverTimestamp(),
+    tokenAcceso: crypto.randomUUID(),
   })
   return ref.id
+}
+
+export async function getEventoByToken(token: string): Promise<Evento | null> {
+  const snap = await getDocs(
+    query(collection(db, 'eventos'), where('tokenAcceso', '==', token), limit(1)),
+  )
+  if (snap.empty) return null
+  const d = snap.docs[0]
+  return { id: d.id, ...d.data() } as Evento
+}
+
+export async function generarTokenAcceso(eventoId: string): Promise<string> {
+  const token = crypto.randomUUID()
+  await updateDoc(doc(db, 'eventos', eventoId), { tokenAcceso: token })
+  return token
 }
 
 export async function eliminarEvento(eventoId: string): Promise<void> {
@@ -95,6 +111,8 @@ export async function registrarAsistencia(
     sexo:            data.sexo            || '',
     rh:              data.rh              || '',
     modo:            data.modo            || 'MANUAL',
+    registradoPor:   data.registradoPor   || '',
+    ipOperador:      data.ipOperador      || '',
     eventoId,
     fechaHora:       serverTimestamp(),
   })
@@ -141,4 +159,57 @@ export async function getFullBackup(): Promise<{
     })),
   )
   return { eventos: full }
+}
+
+// ── Restore ───────────────────────────────────────────────────────────────────
+
+type BackupAsistencia = Record<string, unknown> & { id?: string }
+type BackupEvento     = Record<string, unknown> & { id?: string; asistencias?: BackupAsistencia[] }
+export type BackupData = { eventos: BackupEvento[] }
+
+function backupToTimestamp(v: unknown): Timestamp {
+  if (v instanceof Timestamp) return v
+  if (typeof v === 'string') {
+    const d = new Date(v)
+    if (!isNaN(d.getTime())) return Timestamp.fromDate(d)
+  }
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, number>
+    if (typeof o.seconds === 'number') return new Timestamp(o.seconds, o.nanoseconds ?? 0)
+  }
+  return Timestamp.now()
+}
+
+export async function restaurarBackup(
+  backup: BackupData,
+  onProgress: (msg: string) => void,
+): Promise<{ eventos: number; asistencias: number }> {
+  const list = backup.eventos ?? []
+  let totalEventos = 0, totalAsistencias = 0
+
+  for (let i = 0; i < list.length; i++) {
+    const ev = list[i]
+    if (!ev.id) continue
+    const { id: evId, asistencias, ...evData } = ev
+    await setDoc(
+      doc(db, 'eventos', evId as string),
+      { ...evData, fecha: backupToTimestamp(evData.fecha), creadoEn: backupToTimestamp(evData.creadoEn) },
+      { merge: true },
+    )
+    totalEventos++
+    onProgress(`Importando evento ${i + 1}/${list.length}: ${evData.nombre ?? evId}`)
+
+    for (const asis of asistencias ?? []) {
+      if (!asis.id) continue
+      const { id: asisId, ...asisData } = asis
+      await setDoc(
+        doc(db, 'eventos', evId as string, 'asistencias', asisId as string),
+        { ...asisData, fechaHora: backupToTimestamp(asisData.fechaHora), eventoId: evId },
+        { merge: true },
+      )
+      totalAsistencias++
+    }
+  }
+
+  return { eventos: totalEventos, asistencias: totalAsistencias }
 }

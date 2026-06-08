@@ -10,7 +10,7 @@ import {
   collection, onSnapshot, orderBy, query, Timestamp,
 } from 'firebase/firestore'
 import { db } from '../../lib/firebase'
-import { crearEvento, eliminarEvento, getTotalAsistencias } from '../../lib/firestore'
+import { crearEvento, eliminarEvento, getTotalAsistencias, generarTokenAcceso } from '../../lib/firestore'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../../components/ui/Modal'
 import { Spinner } from '../../components/ui/Spinner'

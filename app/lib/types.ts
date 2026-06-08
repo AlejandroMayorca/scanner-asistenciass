@@ -9,6 +9,7 @@ export interface Evento {
   activo: boolean
   creadoEn: Timestamp | Date
   creadoPor: string
+  tokenAcceso?: string
 }
 
 export interface Asistencia {
@@ -22,6 +23,8 @@ export interface Asistencia {
   rh?: string
   fechaHora: Timestamp | Date
   modo: 'PDF417' | 'MRZ' | 'MANUAL'
+  registradoPor?: string
+  ipOperador?: string
 }
 
 export interface UserProfile {

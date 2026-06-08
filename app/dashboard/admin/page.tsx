@@ -1,9 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  AlertCircle, Download, Shield, Trash2, UserPlus, Users,
+  AlertCircle, CheckCircle, Download, Shield, Trash2, Upload, UserPlus, Users,
 } from 'lucide-react'
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth'
 import { initializeApp, getApps } from 'firebase/app'
@@ -12,8 +12,9 @@ import { firebaseConfig } from '../../lib/firebase'
 import {
   getUsuarios, setUsuarioPerfil, updateUsuario,
   getEventos, eliminarEvento, getTotalAsistencias,
-  getFullBackup,
+  getFullBackup, restaurarBackup,
 } from '../../lib/firestore'
+import type { BackupData } from '../../lib/firestore'
 import { exportarJson } from '../../lib/export'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../../components/ui/Modal'
@@ -327,20 +328,50 @@ function EventosAdminTab() {
 // ── Backup tab ────────────────────────────────────────────────────────────────
 
 function BackupTab() {
-  const [loading, setLoading] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [progress, setProgress] = useState<string[]>([])
+  const [restoreResult, setRestoreResult] = useState<{ eventos: number; asistencias: number } | null>(null)
+  const [restoreError, setRestoreError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const handleBackup = async () => {
-    setLoading(true)
+    setDownloading(true)
     try {
       const data = await getFullBackup()
       exportarJson(data)
     } finally {
-      setLoading(false)
+      setDownloading(false)
     }
   }
 
+  const handleRestoreFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = async ev => {
+      setRestoreResult(null)
+      setRestoreError('')
+      setProgress([])
+      try {
+        const data = JSON.parse(ev.target?.result as string) as BackupData
+        if (!data.eventos || !Array.isArray(data.eventos)) throw new Error('Formato de backup inválido')
+        setRestoring(true)
+        const result = await restaurarBackup(data, msg => setProgress(p => [...p, msg]))
+        setRestoreResult(result)
+      } catch (err: unknown) {
+        setRestoreError((err as Error).message ?? 'Error al restaurar')
+      } finally {
+        setRestoring(false)
+        if (fileRef.current) fileRef.current.value = ''
+      }
+    }
+    reader.readAsText(file)
+  }
+
   return (
-    <div className="max-w-md">
+    <div className="max-w-md space-y-4">
+      {/* Download */}
       <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-6 space-y-4">
         <div>
           <h3 className="font-semibold text-white mb-1">Backup completo JSON</h3>
@@ -351,16 +382,62 @@ function BackupTab() {
         </div>
         <button
           onClick={handleBackup}
-          disabled={loading}
+          disabled={downloading}
           className="flex items-center gap-2 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold transition active:scale-95"
         >
-          {loading ? <><Spinner size="sm" /> Generando backup…</> : <><Download size={16} /> Descargar Backup JSON</>}
+          {downloading ? <><Spinner size="sm" /> Generando backup…</> : <><Download size={16} /> Descargar Backup JSON</>}
         </button>
       </div>
 
-      <p className="text-zinc-600 text-xs mt-4">
-        Solo los administradores pueden descargar backups. El archivo incluye datos personales —
-        manéjalo con cuidado.
+      {/* Restore */}
+      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-6 space-y-4">
+        <div>
+          <h3 className="font-semibold text-white mb-1">Restaurar desde backup</h3>
+          <p className="text-zinc-400 text-sm">
+            Importa un archivo JSON de backup para restaurar eventos y asistencias (usa merge, no sobreescribe datos existentes con otro ID).
+          </p>
+        </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={handleRestoreFile}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={restoring}
+          className="flex items-center gap-2 px-5 py-3 rounded-xl bg-zinc-700 hover:bg-zinc-600 disabled:opacity-60 text-white text-sm font-semibold transition active:scale-95"
+        >
+          {restoring ? <><Spinner size="sm" /> Restaurando…</> : <><Upload size={16} /> Seleccionar archivo JSON</>}
+        </button>
+
+        {progress.length > 0 && (
+          <div className="bg-[#0a0a0a] border border-[#27272a] rounded-xl p-3 max-h-36 overflow-y-auto space-y-0.5">
+            {progress.map((msg, i) => (
+              <p key={i} className="text-xs text-zinc-400 font-mono">{msg}</p>
+            ))}
+          </div>
+        )}
+
+        {restoreResult && (
+          <div className="flex items-start gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3 text-sm text-emerald-400">
+            <CheckCircle size={15} className="mt-0.5 shrink-0" />
+            <span>Restauración completa: <strong>{restoreResult.eventos}</strong> evento{restoreResult.eventos !== 1 ? 's' : ''} y <strong>{restoreResult.asistencias}</strong> asistencia{restoreResult.asistencias !== 1 ? 's' : ''} importadas.</span>
+          </div>
+        )}
+
+        {restoreError && (
+          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-400">
+            <AlertCircle size={14} /> {restoreError}
+          </div>
+        )}
+      </div>
+
+      <p className="text-zinc-600 text-xs">
+        Solo los administradores pueden gestionar backups. Los archivos incluyen datos personales —
+        manéjalos con cuidado.
       </p>
     </div>
   )

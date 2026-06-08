@@ -147,11 +147,14 @@ async function decodeBuffer(
 
 export async function POST(req: NextRequest) {
   const logs: string[] = []
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim()
+    ?? req.headers.get('x-real-ip')
+    ?? ''
 
   try {
     const body = await req.json().catch(() => null)
     if (!body?.imageBase64) {
-      return NextResponse.json({ success: false, error: 'imageBase64 requerido', logs })
+      return NextResponse.json({ success: false, error: 'imageBase64 requerido', logs, clientIp })
     }
 
     const buffer = Buffer.from(body.imageBase64 as string, 'base64')
@@ -160,7 +163,7 @@ export async function POST(req: NextRequest) {
     // Attempt 1 — imagen original
     {
       const r = await decodeBuffer(buffer, 'original', logs)
-      if (r) return NextResponse.json({ success: true, ...r, logs })
+      if (r) return NextResponse.json({ success: true, ...r, logs, clientIp })
     }
 
     // Attempts 2-4 — variantes con jimp
@@ -182,7 +185,7 @@ export async function POST(req: NextRequest) {
 
       for (const [label, bufPromise] of variants) {
         const r = await decodeBuffer(await bufPromise, label, logs)
-        if (r) return NextResponse.json({ success: true, ...r, logs })
+        if (r) return NextResponse.json({ success: true, ...r, logs, clientIp })
       }
     } catch (jimpErr) {
       logs.push(`[jimp] ${String(jimpErr).slice(0, 80)}`)
