@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { doc, getDoc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../../../../lib/firebase'
 import { registrarAsistencia, checkDuplicado } from '../../../../lib/firestore'
+import { useAuth } from '../../../../context/AuthContext'
 import type { Evento } from '../../../../lib/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -246,6 +247,7 @@ const FIELD = 'w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 te
 export default function ScannerPage() {
   const { id: eventoId } = useParams<{ id: string }>()
   const router = useRouter()
+  const { user, displayName } = useAuth()
 
   // Screen state
   const [screen,   setScreen]   = useState<Screen>('select')
@@ -479,7 +481,7 @@ export default function ScannerPage() {
     setConfirmSaving(true); setConfirmError('')
     try {
       const edad = confirmForm.fechaNacimiento ? calcEdad(confirmForm.fechaNacimiento) : 0
-      await registrarAsistencia(eventoId, { cedula:confirmForm.cedula, nombres:confirmForm.nombres, apellidos:confirmForm.apellidos, fechaNacimiento:confirmForm.fechaNacimiento, edad, sexo:(confirmForm.sexo||undefined) as 'M'|'F'|undefined, rh:confirmForm.rh, modo:confirmForm.modo })
+      await registrarAsistencia(eventoId, { cedula:confirmForm.cedula, nombres:confirmForm.nombres, apellidos:confirmForm.apellidos, fechaNacimiento:confirmForm.fechaNacimiento, edad, sexo:(confirmForm.sexo||undefined) as 'M'|'F'|undefined, rh:confirmForm.rh, modo:confirmForm.modo, registradoPor:displayName, operadorUid:user?.uid??'' })
       showToast('#22c55e',`✅ ${confirmForm.apellidos} ${confirmForm.nombres}`)
       setConfirmForm(null); setLog([])
     } catch(e:unknown) { setConfirmError((e as {message?:string}).message??'Error al guardar') }
@@ -494,7 +496,7 @@ export default function ScannerPage() {
     setManualSaving(true); setManualError('')
     try {
       if (await checkDuplicado(eventoId,cedula.trim())) { setManualError('Cédula ya registrada'); return }
-      await registrarAsistencia(eventoId,{cedula:cedula.trim(),nombres:capitalize(nombres.trim()),apellidos:capitalize(apellidos.trim()),fechaNacimiento,edad:calcEdad(fechaNacimiento),sexo:sexo as 'M'|'F',rh:rh.trim(),modo:'MANUAL'})
+      await registrarAsistencia(eventoId,{cedula:cedula.trim(),nombres:capitalize(nombres.trim()),apellidos:capitalize(apellidos.trim()),fechaNacimiento,edad:calcEdad(fechaNacimiento),sexo:sexo as 'M'|'F',rh:rh.trim(),modo:'MANUAL',registradoPor:displayName,operadorUid:user?.uid??''})
       showToast('#22c55e',`✅ ${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`)
       setShowManual(false); setManualForm({cedula:'',nombres:'',apellidos:'',fechaNacimiento:'',sexo:'',rh:''})
     } catch(e:unknown) { setManualError((e as {message?:string}).message??'Error') }
@@ -516,6 +518,12 @@ export default function ScannerPage() {
             <p style={{color:'#fff',fontWeight:600,fontSize:14,margin:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{evento?.nombre??'…'}</p>
             <p style={{color:'#4ade80',fontWeight:700,fontSize:15,margin:0}}>{total} asistente{total!==1?'s':''}</p>
           </div>
+          {displayName && (
+            <div style={{background:'rgba(255,255,255,0.06)',border:'1px solid #27272a',borderRadius:10,padding:'3px 10px',flexShrink:0}}>
+              <p style={{color:'#a1a1aa',fontSize:9,margin:0}}>Operador</p>
+              <p style={{color:'#fff',fontSize:11,fontWeight:600,margin:0,maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{displayName}</p>
+            </div>
+          )}
         </div>
 
         {/* center content */}
@@ -629,7 +637,7 @@ export default function ScannerPage() {
         <button onClick={()=>{setScreen('select');setLog([]);setScanState('idle')}} style={{width:38,height:38,borderRadius:'50%',background:'rgba(255,255,255,0.1)',border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>‹</button>
         <div style={{flex:1,minWidth:0}}>
           <p style={{color:'#fff',fontWeight:600,fontSize:13,margin:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{evento?.nombre??'…'}</p>
-          <p style={{color:'#4ade80',fontWeight:700,fontSize:14,margin:0}}>{total} asistente{total!==1?'s':''}</p>
+          <p style={{color:'#4ade80',fontWeight:700,fontSize:14,margin:0}}>{total} asistente{total!==1?'s':''}{displayName&&<span style={{color:'#71717a',fontWeight:400,fontSize:11}}> · {displayName}</span>}</p>
         </div>
         {/* mode badge + change */}
         <div style={{display:'flex',alignItems:'center',gap:8}}>

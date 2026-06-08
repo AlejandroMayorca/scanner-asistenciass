@@ -23,7 +23,8 @@ export interface Asistencia {
   rh?: string
   fechaHora: Timestamp | Date
   modo: 'PDF417' | 'MRZ' | 'MANUAL'
-  registradoPor?: string
+  registradoPor?: string  // display name
+  operadorUid?: string    // uid for collection-group queries
   ipOperador?: string
 }
 
@@ -33,4 +34,16 @@ export interface UserProfile {
   rol: 'admin' | 'ayudante'
   activo: boolean
   creadoEn: Timestamp | Date
+}
+
+export interface OperadorPerfil {
+  uid: string
+  email: string
+  nombre: string
+  apellido: string
+  rol: 'ayudante'
+  activo: boolean
+  creadoEn: Timestamp | Date
+  creadoPor: string
+  ultimoAcceso: Timestamp | Date | null
 }

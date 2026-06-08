@@ -4,14 +4,19 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { auth } from '../lib/firebase'
-import { getUsuarioPerfil, setUsuarioPerfil } from '../lib/firestore'
-import type { UserProfile } from '../lib/types'
+import {
+  getUsuarioPerfil, setUsuarioPerfil,
+  getOperadorPerfil, updateOperador,
+} from '../lib/firestore'
+import type { UserProfile, OperadorPerfil } from '../lib/types'
 
 const ADMIN_EMAIL = 'admin@cedulascan.com'
 
 interface AuthCtx {
   user: User | null
   profile: UserProfile | null
+  operadorPerfil: OperadorPerfil | null
+  displayName: string
   loading: boolean
   signIn: (email: string, password: string) => Promise<UserProfile>
   signOut: () => Promise<void>
@@ -20,23 +25,45 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [user,          setUser]          = useState<User | null>(null)
+  const [profile,       setProfile]       = useState<UserProfile | null>(null)
+  const [opPerfil,      setOpPerfil]      = useState<OperadorPerfil | null>(null)
+  const [loading,       setLoading]       = useState(true)
+
+  const displayName = opPerfil
+    ? `${opPerfil.nombre} ${opPerfil.apellido}`.trim()
+    : (profile?.email ?? user?.email ?? '')
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async fbUser => {
       setUser(fbUser)
       if (fbUser) {
-        let p = await getUsuarioPerfil(fbUser.uid).catch(() => null)
-        // Auto-seed admin document if missing
+        const [p, op] = await Promise.all([
+          getUsuarioPerfil(fbUser.uid).catch(() => null),
+          getOperadorPerfil(fbUser.uid).catch(() => null),
+        ])
+
+        // Deactivated operator — force sign-out
+        if (op && !op.activo) {
+          await fbSignOut(auth)
+          return
+        }
+
+        if (op) setOpPerfil(op)
+
         if (!p && fbUser.email === ADMIN_EMAIL) {
           await setUsuarioPerfil(fbUser.uid, { email: ADMIN_EMAIL, rol: 'admin', activo: true }).catch(() => {})
-          p = await getUsuarioPerfil(fbUser.uid).catch(() => null)
+          const freshP = await getUsuarioPerfil(fbUser.uid).catch(() => null)
+          setProfile(freshP)
+        } else if (!p && op) {
+          // Operator exists in operadores/ but not in usuarios/ — synthetic profile
+          setProfile({ id: fbUser.uid, email: op.email, rol: 'ayudante', activo: true, creadoEn: op.creadoEn })
+        } else {
+          setProfile(p)
         }
-        setProfile(p)
       } else {
         setProfile(null)
+        setOpPerfil(null)
       }
       setLoading(false)
     })
@@ -45,25 +72,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async (email: string, password: string): Promise<UserProfile> => {
     const cred = await signInWithEmailAndPassword(auth, email, password)
+    const uid  = cred.user.uid
 
-    let p = await getUsuarioPerfil(cred.user.uid).catch(() => null)
+    // Check operadores/ first (new operator system)
+    const op = await getOperadorPerfil(uid).catch(() => null)
+    if (op) {
+      if (!op.activo) {
+        await fbSignOut(auth)
+        throw new Error('Tu cuenta ha sido desactivada. Contacta al administrador.')
+      }
+      updateOperador(uid, { ultimoAcceso: new Date() }).catch(() => {})
+      setOpPerfil(op)
+      const synthetic: UserProfile = { id: uid, email: op.email, rol: 'ayudante', activo: true, creadoEn: op.creadoEn }
+      setProfile(synthetic)
+      return synthetic
+    }
 
-    // Auto-seed admin document on first sign-in
+    // Fallback: usuarios/ (admin + legacy ayudantes)
+    let p = await getUsuarioPerfil(uid).catch(() => null)
+
     if (!p && email === ADMIN_EMAIL) {
-      await setUsuarioPerfil(cred.user.uid, { email: ADMIN_EMAIL, rol: 'admin', activo: true })
-      p = await getUsuarioPerfil(cred.user.uid).catch(() => null)
+      await setUsuarioPerfil(uid, { email: ADMIN_EMAIL, rol: 'admin', activo: true })
+      p = await getUsuarioPerfil(uid).catch(() => null)
     }
 
     if (!p) {
-      // Allow admin@cedulascan.com even without a Firestore doc (fallback)
       if (email === ADMIN_EMAIL) {
-        const fallback: UserProfile = {
-          id: cred.user.uid,
-          email: ADMIN_EMAIL,
-          rol: 'admin',
-          activo: true,
-          creadoEn: new Date(),
-        }
+        const fallback: UserProfile = { id: uid, email: ADMIN_EMAIL, rol: 'admin', activo: true, creadoEn: new Date() }
         setProfile(fallback)
         return fallback
       }
@@ -78,10 +113,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     await fbSignOut(auth)
     setProfile(null)
+    setOpPerfil(null)
     setUser(null)
   }
 
-  return <Ctx.Provider value={{ user, profile, loading, signIn, signOut }}>{children}</Ctx.Provider>
+  return (
+    <Ctx.Provider value={{ user, profile, operadorPerfil: opPerfil, displayName, loading, signIn, signOut }}>
+      {children}
+    </Ctx.Provider>
+  )
 }
 
 export function useAuth() {

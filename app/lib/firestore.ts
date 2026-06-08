@@ -1,9 +1,9 @@
 import {
-  collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDoc, getDocs,
+  collection, collectionGroup, doc, addDoc, updateDoc, deleteDoc, setDoc, getDoc, getDocs,
   query, where, orderBy, limit, Timestamp, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
-import type { Evento, Asistencia, UserProfile } from './types'
+import type { Evento, Asistencia, UserProfile, OperadorPerfil } from './types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +144,47 @@ export async function getUsuarios(): Promise<UserProfile[]> {
 
 export async function updateUsuario(uid: string, data: Partial<UserProfile>): Promise<void> {
   await updateDoc(doc(db, 'usuarios', uid), data as Record<string, unknown>)
+}
+
+// ── Operadores ────────────────────────────────────────────────────────────────
+
+export async function getOperadorPerfil(uid: string): Promise<OperadorPerfil | null> {
+  const snap = await getDoc(doc(db, 'operadores', uid))
+  return snap.exists() ? ({ uid: snap.id, ...snap.data() } as OperadorPerfil) : null
+}
+
+export async function setOperador(
+  uid: string,
+  data: { email: string; nombre: string; apellido: string; activo: boolean; creadoPor: string },
+): Promise<void> {
+  await setDoc(doc(db, 'operadores', uid), {
+    uid,
+    ...data,
+    rol: 'ayudante' as const,
+    creadoEn: serverTimestamp(),
+    ultimoAcceso: null,
+  })
+}
+
+export async function updateOperador(uid: string, data: Partial<OperadorPerfil>): Promise<void> {
+  await updateDoc(doc(db, 'operadores', uid), data as Record<string, unknown>)
+}
+
+export async function getOperadores(): Promise<OperadorPerfil[]> {
+  const snap = await getDocs(query(collection(db, 'operadores'), orderBy('creadoEn', 'desc')))
+  return snap.docs.map(d => ({ uid: d.id, ...d.data() } as OperadorPerfil))
+}
+
+export async function getAsistenciasByOperador(
+  operadorUid: string,
+): Promise<(Asistencia & { eventoId: string })[]> {
+  const snap = await getDocs(
+    query(collectionGroup(db, 'asistencias'), where('operadorUid', '==', operadorUid)),
+  )
+  return snap.docs.map(d => {
+    const data = d.data() as Asistencia & { eventoId: string }
+    return { id: d.id, ...data, eventoId: data.eventoId ?? d.ref.parent.parent?.id ?? '' }
+  })
 }
 
 // ── Backup ────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import {
 import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, generarTokenAcceso, toDate } from '../../../lib/firestore'
 import { exportarExcel } from '../../../lib/export'
 import { Spinner } from '../../../components/ui/Spinner'
+import { useAuth } from '../../../context/AuthContext'
 import type { Evento, Asistencia } from '../../../lib/types'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -64,6 +65,7 @@ function calcStats(asistencias: Asistencia[]) {
 // ── Tab: Registrar ─────────────────────────────────────────────────────────────
 
 function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; evento: Evento | null; onRegistered: () => void }) {
+  const { user, displayName } = useAuth()
   const [localToken, setLocalToken] = useState<string | undefined>()
   const [copied, setCopied] = useState(false)
   const [generatingToken, setGeneratingToken] = useState(false)
@@ -114,6 +116,8 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
         sexo: form.sexo as 'M' | 'F',
         rh: form.rh.trim() || undefined,
         modo: 'MANUAL',
+        registradoPor: displayName,
+        operadorUid: user?.uid ?? '',
       })
       showBanner('ok', `✅ ${form.apellidos} ${form.nombres} — ${edad} años`)
       setForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
