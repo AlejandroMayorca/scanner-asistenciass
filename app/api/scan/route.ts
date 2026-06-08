@@ -1,49 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import {
-  BarcodeFormat,
-  DecodeHintType,
-  MultiFormatReader,
-  RGBLuminanceSource,
-  BinaryBitmap,
-  HybridBinarizer,
-} from '@zxing/library'
+import { readBarcodes } from 'zxing-wasm/reader'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-interface JimpBitmap {
-  data: Buffer
-  width: number
-  height: number
-}
-
-function toLuminances(bitmap: JimpBitmap): Uint8ClampedArray {
-  const { data, width: w, height: h } = bitmap
-  const lum = new Uint8ClampedArray(w * h)
-  for (let i = 0; i < w * h; i++) {
-    const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2]
-    lum[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b)
-  }
-  return lum
-}
-
-const HINTS = new Map<DecodeHintType, unknown>([
-  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.PDF_417, BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX]],
-  [DecodeHintType.TRY_HARDER, true],
-])
-
-function tryDecode(lum: Uint8ClampedArray, w: number, h: number): string | null {
-  try {
-    const source = new RGBLuminanceSource(lum, w, h)
-    const bitmap = new BinaryBitmap(new HybridBinarizer(source))
-    const reader = new MultiFormatReader()
-    reader.setHints(HINTS)
-    return reader.decode(bitmap).getText()
-  } catch {
-    return null
-  }
-}
-
-// ─── POST /api/scan ───────────────────────────────────────────────────────────
+export const runtime = 'nodejs'
+export const maxDuration = 30
 
 export async function POST(req: NextRequest) {
   const logs: string[] = []
@@ -51,82 +10,83 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     if (!body?.imageBase64) {
-      return NextResponse.json({ success: false, error: 'imageBase64 requerido' })
+      return NextResponse.json({ success: false, error: 'imageBase64 requerido', logs })
     }
 
     const buffer = Buffer.from(body.imageBase64 as string, 'base64')
     logs.push(`[srv] buffer ${Math.round(buffer.length / 1024)}kb`)
 
-    // Dynamic import — Jimp is ESM in CI but CJS in local
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jimpModule: any = await import('jimp')
-    const Jimp = jimpModule.default ?? jimpModule.Jimp
-    const base = await Jimp.read(buffer)
-    const W = base.bitmap.width as number
-    const H = base.bitmap.height as number
-    logs.push(`[srv] imagen ${W}×${H}`)
-
-    // Attempt 1: original image
+    // Attempt 1: buffer directo (JPEG/PNG bytes → zxing-wasm los decodifica)
     {
-      const lum = toLuminances(base.bitmap as JimpBitmap)
-      const text = tryDecode(lum, W, H)
-      if (text) {
-        logs.push(`[srv] OK original: "${text}"`)
-        return NextResponse.json({ success: true, text, attempt: 'original', logs })
+      const results = await readBarcodes(buffer, {
+        formats: ['PDF417', 'QRCode', 'DataMatrix'],
+        tryHarder: true,
+      })
+      const valid = results.filter(r => r.isValid)
+      if (valid.length > 0) {
+        const text = valid[0].text
+        logs.push(`[srv] OK buffer: "${text}"`)
+        return NextResponse.json({ success: true, text, raw: text, logs })
       }
-      logs.push('[srv] original: sin detección')
+      logs.push(`[srv] buffer: sin detección (${results[0]?.error ?? 'sin error'})`)
     }
 
-    // Attempt 2: high contrast + brightness
-    {
-      const img2 = base.clone().contrast(0.6).brightness(0.1)
-      const lum  = toLuminances(img2.bitmap as JimpBitmap)
-      const text = tryDecode(lum, W, H)
-      if (text) {
+    // Attempt 2: preprocesar con jimp (alto contraste) → volver a JPEG → reintentar
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jimpModule: any = await import('jimp')
+      const Jimp = jimpModule.default ?? jimpModule.Jimp
+      const img = await Jimp.read(buffer)
+
+      // alta contraste
+      const buf2: Buffer = await img.clone().contrast(0.7).brightness(0.1)
+        .getBufferAsync('image/jpeg')
+      const r2 = await readBarcodes(buf2, {
+        formats: ['PDF417', 'QRCode', 'DataMatrix'],
+        tryHarder: true,
+      })
+      const v2 = r2.filter(r => r.isValid)
+      if (v2.length > 0) {
+        const text = v2[0].text
         logs.push(`[srv] OK contraste: "${text}"`)
-        return NextResponse.json({ success: true, text, attempt: 'contraste', logs })
+        return NextResponse.json({ success: true, text, raw: text, logs })
       }
-      logs.push('[srv] contraste: sin detección')
-    }
+      logs.push(`[srv] contraste: sin detección`)
 
-    // Attempt 3: bottom 40% crop (PDF417 zone of cédula vieja)
-    {
-      const sy   = Math.floor(H * 0.60)
-      const sh   = Math.floor(H * 0.40)
-      const img3 = base.clone().crop(0, sy, W, sh)
-      const lum  = toLuminances(img3.bitmap as JimpBitmap)
-      const text = tryDecode(lum, W, sh)
-      if (text) {
+      // recorte inferior 40%
+      const H = img.bitmap.height as number
+      const W = img.bitmap.width as number
+      const sy = Math.floor(H * 0.60), sh = Math.floor(H * 0.40)
+      const buf3: Buffer = await img.clone().crop(0, sy, W, sh)
+        .getBufferAsync('image/jpeg')
+      const r3 = await readBarcodes(buf3, {
+        formats: ['PDF417', 'QRCode', 'DataMatrix'],
+        tryHarder: true,
+      })
+      const v3 = r3.filter(r => r.isValid)
+      if (v3.length > 0) {
+        const text = v3[0].text
         logs.push(`[srv] OK inferior: "${text}"`)
-        return NextResponse.json({ success: true, text, attempt: 'inferior', logs })
+        return NextResponse.json({ success: true, text, raw: text, logs })
       }
-      logs.push('[srv] inferior: sin detección')
-    }
+      logs.push(`[srv] inferior: sin detección`)
 
-    // Attempt 4: bottom 40% + high contrast
-    {
-      const sy   = Math.floor(H * 0.60)
-      const sh   = Math.floor(H * 0.40)
-      const img4 = base.clone().contrast(0.8).brightness(0.15).crop(0, sy, W, sh)
-      const lum  = toLuminances(img4.bitmap as JimpBitmap)
-      const text = tryDecode(lum, W, sh)
-      if (text) {
+      // recorte inferior 40% + contraste
+      const buf4: Buffer = await img.clone().contrast(0.8).brightness(0.15).crop(0, sy, W, sh)
+        .getBufferAsync('image/jpeg')
+      const r4 = await readBarcodes(buf4, {
+        formats: ['PDF417', 'QRCode', 'DataMatrix'],
+        tryHarder: true,
+      })
+      const v4 = r4.filter(r => r.isValid)
+      if (v4.length > 0) {
+        const text = v4[0].text
         logs.push(`[srv] OK inf+contraste: "${text}"`)
-        return NextResponse.json({ success: true, text, attempt: 'inf+contraste', logs })
+        return NextResponse.json({ success: true, text, raw: text, logs })
       }
-      logs.push('[srv] inf+contraste: sin detección')
-    }
-
-    // Attempt 5: inverted image (some PDF417s scan better inverted)
-    {
-      const img5 = base.clone().invert()
-      const lum  = toLuminances(img5.bitmap as JimpBitmap)
-      const text = tryDecode(lum, W, H)
-      if (text) {
-        logs.push(`[srv] OK invertido: "${text}"`)
-        return NextResponse.json({ success: true, text, attempt: 'invertido', logs })
-      }
-      logs.push('[srv] invertido: sin detección')
+      logs.push(`[srv] inf+contraste: sin detección`)
+    } catch (jimpErr) {
+      logs.push(`[srv] jimp no disponible: ${String(jimpErr).slice(0, 80)}`)
     }
 
     logs.push('[srv] todos los intentos fallaron')
@@ -134,7 +94,7 @@ export async function POST(req: NextRequest) {
 
   } catch (error) {
     const msg = String(error)
-    logs.push(`[srv] excepción: ${msg.slice(0, 100)}`)
+    logs.push(`[srv] excepción: ${msg.slice(0, 150)}`)
     return NextResponse.json({ success: false, error: msg, logs })
   }
 }
