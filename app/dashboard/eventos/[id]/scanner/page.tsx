@@ -225,6 +225,8 @@ export default function ScannerPage() {
   })
   const [manualSaving, setManualSaving] = useState(false)
   const [manualError,  setManualError]  = useState('')
+  const [failCount,    setFailCount]    = useState(0)
+  const [countdown,    setCountdown]    = useState(false)
 
   // ── Camera + Tesseract init ────────────────────────────────────────────────
 
@@ -235,7 +237,8 @@ export default function ScannerPage() {
     const initCamera = async () => {
       try {
         const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          video: { facingMode: { ideal: 'environment' }, focusMode: 'continuous', advanced: [{ focusMode: 'continuous' }] } as any,
         })
         if (!alive) { s.getTracks().forEach(t => t.stop()); return }
         streamRef.current = s
@@ -308,39 +311,53 @@ export default function ScannerPage() {
 
   const handleCapture = useCallback(async () => {
     const video = videoRef.current
-    if (!video || processing || confirmForm) return
+    if (!video || processing || countdown || confirmForm) return
     if (!video.videoWidth || !video.videoHeight) return
+
+    // Phase 1: pause 800ms so autofocus can settle
+    setCountdown(true)
+    await new Promise(r => setTimeout(r, 800))
+    setCountdown(false)
 
     setProcessing(true)
     try {
-      // Snapshot current frame
+      // Snapshot with contrast/brightness boost to help barcode readers
       const canvas = document.createElement('canvas')
       canvas.width  = video.videoWidth
       canvas.height = video.videoHeight
-      canvas.getContext('2d')!.drawImage(video, 0, 0)
+      const ctx = canvas.getContext('2d')!
+      ctx.filter = 'contrast(1.5) brightness(1.1)'
+      ctx.drawImage(video, 0, 0)
+      ctx.filter = 'none'
 
       // Method 1 — ZXing (PDF417, QR, DataMatrix)
       const tryZxing = (): Cedula | null => {
         try {
           const result = readerRef.current!.decodeFromCanvas(canvas)
-          return parseBarcode(result.getText())
+          const text = result.getText()
+          console.log('[ZXing] detectado:', text.slice(0, 100))
+          return parseBarcode(text)
         } catch {
+          console.log('[ZXing] sin detección')
           return null
         }
       }
 
-      // Method 2 — Tesseract on bottom 50% (MRZ zone of cédula nueva)
+      // Method 2 — Tesseract on bottom 60% (MRZ zone of cédula nueva)
       const tryTesseract = async (): Promise<Cedula | null> => {
         if (!tReadyRef.current || !tWorkerRef.current) return null
         try {
-          const h    = Math.floor(canvas.height / 2)
-          const crop = document.createElement('canvas')
-          crop.width  = canvas.width
-          crop.height = h
-          crop.getContext('2d')!.drawImage(canvas, 0, h, canvas.width, h, 0, 0, canvas.width, h)
+          const startY = Math.floor(canvas.height * 0.4)
+          const h      = Math.floor(canvas.height * 0.6)
+          const crop   = document.createElement('canvas')
+          crop.width   = canvas.width
+          crop.height  = h
+          crop.getContext('2d')!.drawImage(canvas, 0, startY, canvas.width, h, 0, 0, canvas.width, h)
           const { data: { text } } = await tWorkerRef.current.recognize(crop)
+          console.log('[Tesseract] texto:', text.trim().slice(0, 150))
           return parseMrzText(text)
-        } catch {
+        } catch (err) {
+          console.log('[Tesseract] error:', err)
           return null
         }
       }
@@ -356,6 +373,7 @@ export default function ScannerPage() {
         (tr.status === 'fulfilled' ? tr.value : null)
 
       if (!detected || detected.cedula.length < 5) {
+        setFailCount(c => c + 1)
         showToast('red', '❌ No se detectó. Intenta de nuevo')
         return
       }
@@ -367,6 +385,7 @@ export default function ScannerPage() {
         return
       }
 
+      setFailCount(0)
       setConfirmForm({
         cedula:          detected.cedula,
         nombres:         detected.nombres,
@@ -379,7 +398,7 @@ export default function ScannerPage() {
     } finally {
       setProcessing(false)
     }
-  }, [processing, confirmForm, eventoId, showToast])
+  }, [processing, countdown, confirmForm, eventoId, showToast])
 
   // ── Torch toggle ──────────────────────────────────────────────────────────
 
@@ -532,14 +551,33 @@ export default function ScannerPage() {
 
       {/* ── Bottom bar ──────────────────────────────────────────────────── */}
       <div className="absolute bottom-0 inset-x-0 z-10 px-4 pt-4 pb-10">
+        {/* Retry panel after 2 consecutive failures */}
+        {failCount >= 2 && !processing && !countdown && !confirmForm && (
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => { setFailCount(0); handleCapture() }}
+              className="flex-1 py-4 rounded-2xl bg-white/10 backdrop-blur-md text-white font-semibold text-sm active:scale-95 transition-all"
+            >
+              📷 Reintentar
+            </button>
+            <button
+              onClick={() => setShowManual(true)}
+              className="flex-1 py-4 rounded-2xl bg-emerald-600 text-white font-semibold text-sm active:scale-95 transition-all"
+            >
+              ✏️ Ingresar manualmente
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-3">
           {/* Capture — takes most of the width */}
           <button
             onClick={handleCapture}
-            disabled={processing || !!confirmForm}
+            disabled={processing || countdown || !!confirmForm}
             className="flex-1 h-16 rounded-2xl bg-white text-black font-bold text-lg flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50 shadow-xl"
           >
-            {processing ? (
+            {countdown ? (
+              <span className="text-sm font-semibold">Capturando en 1…</span>
+            ) : processing ? (
               <>
                 <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
                 <span className="text-sm font-semibold">Procesando…</span>
@@ -563,11 +601,17 @@ export default function ScannerPage() {
         </div>
       </div>
 
-      {/* ── Processing overlay ───────────────────────────────────────────── */}
-      {processing && (
-        <div className="absolute inset-0 z-20 bg-black/40 flex flex-col items-center justify-center gap-3 pointer-events-none">
-          <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-          <p className="text-white font-semibold text-sm tracking-wide">Procesando…</p>
+      {/* ── Processing / countdown overlay ──────────────────────────────── */}
+      {(processing || countdown) && (
+        <div className="absolute inset-0 z-20 bg-black/45 flex flex-col items-center justify-center gap-3 pointer-events-none">
+          {countdown ? (
+            <p className="text-white font-bold text-3xl tracking-wide drop-shadow-lg">Capturando en 1…</p>
+          ) : (
+            <>
+              <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+              <p className="text-white font-semibold text-sm tracking-wide">Procesando…</p>
+            </>
+          )}
         </div>
       )}
 
