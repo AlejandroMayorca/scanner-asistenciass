@@ -57,8 +57,7 @@ const HINTS = new Map<DecodeHintType, unknown>([
   [DecodeHintType.TRY_HARDER, true],
 ])
 
-// ─── PDF417 parser ─────────────────────────────────────────────────────────────
-// [0]=apellidos [1]=nombres [2]=sexo [3]=cedula [4]=rh [5]=fechaNac(YYYYMMDD)
+// ─── PDF417 parser (cédula vieja) ─────────────────────────────────────────────
 
 const RS = '\x1e'
 
@@ -67,8 +66,8 @@ function parseFechaPdf(raw: string): { fechaNacimiento: string; edad: number } |
   if (c.length !== 8) return null
   const y = c.slice(0, 4), mo = c.slice(4, 6), d = c.slice(6, 8)
   if (parseInt(y) < 1900 || parseInt(y) > new Date().getFullYear()) return null
-  const fechaNacimiento = `${y}-${mo}-${d}`
-  return { fechaNacimiento, edad: calcEdad(fechaNacimiento) }
+  const fn = `${y}-${mo}-${d}`
+  return { fechaNacimiento: fn, edad: calcEdad(fn) }
 }
 
 function cleanName(s: string): string {
@@ -112,8 +111,6 @@ function parsePdf417(raw: string): Cedula | null {
 }
 
 // ─── MRZ parser (cédula nueva) ────────────────────────────────────────────────
-// L2: YYMMDD+sexo(pos7)+...+COL+cédula<...
-// L3: APELLIDOS<<NOMBRES
 
 function cleanMrzName(s: string): string {
   return capitalize(s.replace(/<+/g, ' ').replace(/[^A-Za-z\s]/g, '').trim())
@@ -124,7 +121,6 @@ function parseMrzLines(_l1: string, l2: string, l3: string): Cedula | null {
   if (colIdx < 0) return null
   const cedula = l2.slice(colIdx + 3).match(/^\d+/)?.[0] ?? ''
   if (cedula.length < 5) return null
-
   const yy = parseInt(l2.slice(0, 2))
   const mm = parseInt(l2.slice(2, 4))
   const dd = parseInt(l2.slice(4, 6))
@@ -136,12 +132,10 @@ function parseMrzLines(_l1: string, l2: string, l3: string): Cedula | null {
   }
   const sc   = l2[7]
   const sexo: 'M' | 'F' | undefined = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
-
   const nameRaw   = l3.replace(/<+$/, '')
   const sepIdx    = nameRaw.indexOf('<<')
   const apellidos = sepIdx >= 0 ? cleanMrzName(nameRaw.slice(0, sepIdx)) : cleanMrzName(nameRaw)
   const nombres   = sepIdx >= 0 ? cleanMrzName(nameRaw.slice(sepIdx + 2)) : ''
-
   return { cedula, nombres, apellidos, sexo, fechaNacimiento, edad, modo: 'MRZ' }
 }
 
@@ -149,7 +143,6 @@ function parseMrzText(raw: string): Cedula | null {
   const upper = raw.toUpperCase()
   const lines  = upper.split(/[\n\r]+/).map(l => l.trim().replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 10)
   if (lines.length === 0) return null
-
   for (const pfx of ['ICCOL', 'IDCOL', 'IC<COL', 'ID<COL']) {
     const i = lines.findIndex(l => l.startsWith(pfx))
     if (i >= 0 && i + 2 < lines.length) {
@@ -170,12 +163,8 @@ function parseMrzText(raw: string): Cedula | null {
   return null
 }
 
-// ─── MRZ regex fallback ───────────────────────────────────────────────────────
-
 function parseMrzRegex(text: string): Cedula | null {
   const up = text.toUpperCase().replace(/[^A-Z0-9<\n\r]/g, ' ')
-
-  // Cedula: preferir patrón COL (línea 2) — más fiable que ICCOL
   let cedula = ''
   const m1 = up.match(/COL(\d{6,12})[< \n\r]/)
   if (m1) cedula = m1[1]
@@ -184,15 +173,9 @@ function parseMrzRegex(text: string): Cedula | null {
     if (m2) cedula = m2[1]
   }
   if (cedula.length < 5) return null
-
-  // Nombres: patrón APELLIDOS<<NOMBRES
   let apellidos = '', nombres = ''
   const m3 = up.match(/([A-Z][A-Z< ]+)<<([A-Z][A-Z< ]*)/)
-  if (m3) {
-    apellidos = cleanMrzName(m3[1])
-    nombres   = cleanMrzName(m3[2])
-  }
-
+  if (m3) { apellidos = cleanMrzName(m3[1]); nombres = cleanMrzName(m3[2]) }
   return { cedula, apellidos, nombres, modo: 'MRZ' }
 }
 
@@ -210,18 +193,13 @@ export default function ScannerPage() {
   const { id: eventoId } = useParams<{ id: string }>()
   const router = useRouter()
 
-  const videoRef   = useRef<HTMLVideoElement>(null)
-  const streamRef  = useRef<MediaStream | null>(null)
-  const trackRef   = useRef<MediaStreamTrack | null>(null)
+  const inputRef   = useRef<HTMLInputElement>(null)
   const readerRef  = useRef<BrowserMultiFormatReader | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tWorkerRef = useRef<any>(null)
   const tReadyRef  = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const [camError,      setCamError]      = useState<string | null>(null)
-  const [hasTorch,      setHasTorch]      = useState(false)
-  const [torchOn,       setTorchOn]       = useState(false)
   const [processing,    setProcessing]    = useState(false)
   const [toast,         setToast]         = useState<ToastState>(null)
   const [confirmForm,   setConfirmForm]   = useState<ConfirmForm | null>(null)
@@ -236,47 +214,21 @@ export default function ScannerPage() {
   })
   const [manualSaving, setManualSaving] = useState(false)
   const [manualError,  setManualError]  = useState('')
-  const [failCount,    setFailCount]    = useState(0)
-  const [countdown,    setCountdown]    = useState(false)
   const [debugLog,     setDebugLog]     = useState<string[]>([])
+  const [tReady,       setTReady]       = useState(false)
 
-  // ── Debug log helper ──────────────────────────────────────────────────────
+  // ── Debug log ─────────────────────────────────────────────────────────────
 
   const addLog = useCallback((msg: string) => {
     console.log(msg)
-    setDebugLog(prev => [...prev.slice(-7), msg])
+    setDebugLog(prev => [...prev.slice(-9), msg])
   }, [])
 
-  // ── Camera + Tesseract init ────────────────────────────────────────────────
+  // ── Init ZXing + Tesseract ────────────────────────────────────────────────
 
   useEffect(() => {
     let alive = true
     readerRef.current = new BrowserMultiFormatReader(HINTS)
-
-    const initCamera = async () => {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            focusMode: 'continuous', advanced: [{ focusMode: 'continuous' }],
-          } as any,
-        })
-        if (!alive) { s.getTracks().forEach(t => t.stop()); return }
-        streamRef.current = s
-        if (videoRef.current) videoRef.current.srcObject = s
-        const track = s.getVideoTracks()[0]
-        if (track) {
-          trackRef.current = track
-          try {
-            const caps = track.getCapabilities?.()
-            if (caps && 'torch' in caps) setHasTorch(true)
-          } catch { /* ignore */ }
-        }
-      } catch {
-        if (alive) setCamError('No se pudo acceder a la cámara. Verifica los permisos.')
-      }
-    }
 
     const initTesseract = async () => {
       try {
@@ -289,15 +241,14 @@ export default function ScannerPage() {
         if (!alive) { await worker.terminate(); return }
         tWorkerRef.current = worker
         tReadyRef.current  = true
-      } catch { /* ZXing only */ }
+        setTReady(true)
+      } catch { /* OCR no disponible */ }
     }
 
-    initCamera()
     initTesseract()
 
     return () => {
       alive = false
-      streamRef.current?.getTracks().forEach(t => t.stop())
       tWorkerRef.current?.terminate?.()
       if (toastTimer.current) clearTimeout(toastTimer.current)
     }
@@ -319,150 +270,127 @@ export default function ScannerPage() {
     })
   }, [eventoId])
 
-  // ── Toast helper ──────────────────────────────────────────────────────────
+  // ── Toast ──────────────────────────────────────────────────────────────────
 
   const showToast = useCallback((color: 'red' | 'yellow' | 'green', msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current)
     setToast({ color, msg })
-    toastTimer.current = setTimeout(() => setToast(null), 2500)
+    toastTimer.current = setTimeout(() => setToast(null), 3000)
   }, [])
 
-  // ── Focus ──────────────────────────────────────────────────────────────────
+  // ── Image processing ───────────────────────────────────────────────────────
 
-  const handleFocus = useCallback(async (e?: React.MouseEvent<HTMLElement>) => {
-    const track = trackRef.current
-    if (!track) return
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const adv: any = { focusMode: 'single-shot' }
-      if (e && videoRef.current) {
-        const rect = videoRef.current.getBoundingClientRect()
-        adv.focusPointOfInterest = {
-          x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-          y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
-        }
-      }
-      await track.applyConstraints({ advanced: [adv] })
-      addLog('[Focus] single-shot OK')
-    } catch {
-      addLog('[Focus] no soportado')
-    }
-  }, [addLog])
-
-  // ── Capture & process ─────────────────────────────────────────────────────
-
-  const handleCapture = useCallback(async () => {
-    const video = videoRef.current
-    if (!video || processing || countdown || confirmForm) return
-    if (!video.videoWidth || !video.videoHeight) return
-
-    // 800ms autofocus delay
-    setCountdown(true)
-    await new Promise(r => setTimeout(r, 800))
-    setCountdown(false)
+  const handleImageCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = '' // reset so same photo can be retaken
 
     setProcessing(true)
     setDebugLog([])
-    try {
-      // High-res canvas (2x) for better barcode readability
-      const W = video.videoWidth, H = video.videoHeight
-      const base = document.createElement('canvas')
-      base.width  = W * 2
-      base.height = H * 2
-      const bCtx = base.getContext('2d')!
-      bCtx.scale(2, 2)
-      bCtx.drawImage(video, 0, 0)
-      bCtx.setTransform(1, 0, 0, 1, 0, 0)
 
-      // Helper: create derived canvas with optional filter and crop
-      const makeCanvas = (
-        filter: string,
-        crop?: { sy: number; sh: number },
-      ): HTMLCanvasElement => {
-        const c   = document.createElement('canvas')
-        const src = base
-        c.width   = src.width
-        c.height  = crop ? crop.sh : src.height
-        const cx  = c.getContext('2d')!
-        cx.filter = filter || 'none'
-        if (crop) cx.drawImage(src, 0, crop.sy, src.width, crop.sh, 0, 0, src.width, crop.sh)
-        else      cx.drawImage(src, 0, 0)
-        cx.filter = 'none'
-        return c
+    try {
+      // Load image from file
+      const url = URL.createObjectURL(file)
+      const img  = new Image()
+      img.src    = url
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej() })
+      addLog(`[Foto] ${img.naturalWidth}×${img.naturalHeight}px`)
+
+      const W = img.naturalWidth, H = img.naturalHeight
+
+      // ── ZXing attempt 1: original image element (best for iOS) ──────────
+      let zxingText: string | null = null
+      try {
+        const res = await readerRef.current!.decodeFromImageElement(img)
+        zxingText = res.getText()
+        addLog(`[ZXing orig] "${zxingText.slice(0, 80)}"`)
+      } catch {
+        addLog('[ZXing orig] sin detección')
       }
 
-      // Helper: decode via img element (better iOS compatibility than decodeFromCanvas)
-      const decodeImg = (canvas: HTMLCanvasElement): Promise<string | null> =>
-        new Promise(resolve => {
-          const img = new Image()
-          img.onload = async () => {
-            try {
-              const res = await readerRef.current!.decodeFromImageElement(img)
-              resolve(res.getText())
-            } catch { resolve(null) }
-          }
-          img.onerror = () => resolve(null)
-          img.src = canvas.toDataURL('image/png')
-        })
-
-      // 4 ZXing attempts with different filters
-      const attempts = [
-        { label: 'original',         canvas: makeCanvas('none') },
-        { label: 'contraste alto',   canvas: makeCanvas('contrast(2) brightness(1.2) grayscale(1)') },
-        { label: 'invertido',        canvas: makeCanvas('invert(1) contrast(2)') },
-        { label: 'mitad inferior',   canvas: makeCanvas('none', { sy: base.height / 2, sh: base.height / 2 }) },
-      ]
-
-      let zxingResult: Cedula | null = null
-      for (const { label, canvas } of attempts) {
-        const text = await decodeImg(canvas)
-        if (text) {
-          addLog(`[ZXing ${label}] "${text.slice(0, 70)}"`)
-          const parsed = parseBarcode(text)
-          if (parsed) { zxingResult = parsed; break }
-          addLog(`[ZXing ${label}] texto inválido`)
-        } else {
-          addLog(`[ZXing ${label}] sin detección`)
+      // ── ZXing attempt 2: high-contrast grayscale canvas ─────────────────
+      if (!zxingText) {
+        const c2 = document.createElement('canvas')
+        c2.width = W; c2.height = H
+        const x2 = c2.getContext('2d')!
+        x2.filter = 'contrast(2) grayscale(1)'
+        x2.drawImage(img, 0, 0)
+        x2.filter = 'none'
+        try {
+          const res = await readerRef.current!.decodeFromCanvas(c2)
+          zxingText = res.getText()
+          addLog(`[ZXing contraste] "${zxingText.slice(0, 80)}"`)
+        } catch {
+          addLog('[ZXing contraste] sin detección')
         }
       }
 
-      // Tesseract on bottom 60% (MRZ zone)
-      let tesseractResult: Cedula | null = null
-      if (!zxingResult) {
+      // ── ZXing attempt 3: bottom 35% crop (PDF417 en cédula vieja) ───────
+      if (!zxingText) {
+        const sh = Math.floor(H * 0.35), sy = Math.floor(H * 0.65)
+        const c3 = document.createElement('canvas')
+        c3.width = W; c3.height = sh
+        c3.getContext('2d')!.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
+        try {
+          const res = await readerRef.current!.decodeFromCanvas(c3)
+          zxingText = res.getText()
+          addLog(`[ZXing inferior] "${zxingText.slice(0, 80)}"`)
+        } catch {
+          addLog('[ZXing inferior] sin detección')
+        }
+      }
+
+      // ── ZXing attempt 4: bottom 35% with contrast ────────────────────────
+      if (!zxingText) {
+        const sh = Math.floor(H * 0.35), sy = Math.floor(H * 0.65)
+        const c4 = document.createElement('canvas')
+        c4.width = W; c4.height = sh
+        const x4 = c4.getContext('2d')!
+        x4.filter = 'contrast(2) brightness(1.2)'
+        x4.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
+        x4.filter = 'none'
+        try {
+          const res = await readerRef.current!.decodeFromCanvas(c4)
+          zxingText = res.getText()
+          addLog(`[ZXing inf+contraste] "${zxingText.slice(0, 80)}"`)
+        } catch {
+          addLog('[ZXing inf+contraste] sin detección')
+        }
+      }
+
+      URL.revokeObjectURL(url)
+
+      let detected: Cedula | null = null
+
+      if (zxingText) {
+        detected = parseBarcode(zxingText)
+        if (!detected) addLog(`[Parse] formato no reconocido: "${zxingText.slice(0, 40)}"`)
+      }
+
+      // ── Tesseract: bottom 45% for MRZ ────────────────────────────────────
+      if (!detected) {
         if (tReadyRef.current && tWorkerRef.current) {
           try {
-            const sy   = Math.floor(base.height * 0.4)
-            const sh   = Math.floor(base.height * 0.6)
-            const crop = makeCanvas('none', { sy, sh })
-            const { data: { text } } = await tWorkerRef.current.recognize(crop)
-            addLog(`[Tesseract] "${text.trim().replace(/\n/g, ' ').slice(0, 100)}"`)
-
-            // Try structured MRZ parse
-            tesseractResult = parseMrzText(text)
-            if (tesseractResult) {
-              addLog(`[Tesseract MRZ] cédula=${tesseractResult.cedula}`)
-            } else {
-              // Regex fallback
-              tesseractResult = parseMrzRegex(text)
-              if (tesseractResult) {
-                addLog(`[Tesseract regex] cédula=${tesseractResult.cedula}`)
-              } else {
-                addLog('[Tesseract] sin resultado')
-              }
-            }
+            const sy  = Math.floor(H * 0.55), sh = Math.floor(H * 0.45)
+            const ct  = document.createElement('canvas')
+            ct.width  = W; ct.height = sh
+            ct.getContext('2d')!.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
+            const { data: { text } } = await tWorkerRef.current.recognize(ct)
+            const flat = text.trim().replace(/\n/g, ' ')
+            addLog(`[Tesseract] "${flat.slice(0, 120)}"`)
+            detected = parseMrzText(text) ?? parseMrzRegex(text)
+            if (detected) addLog(`[Tesseract OK] ${detected.modo} cédula=${detected.cedula}`)
+            else addLog('[Tesseract] sin resultado')
           } catch (err) {
             addLog(`[Tesseract] error: ${String(err).slice(0, 60)}`)
           }
         } else {
-          addLog('[Tesseract] no inicializado')
+          addLog(`[Tesseract] ${tReady ? 'ocupado' : 'iniciando...'}`)
         }
       }
 
-      const detected = zxingResult ?? tesseractResult
-
       if (!detected || detected.cedula.length < 5) {
-        setFailCount(c => c + 1)
-        showToast('red', '❌ No se detectó. Intenta de nuevo')
+        showToast('red', '❌ No se detectó. Intenta de nuevo con mejor luz o ángulo')
         return
       }
 
@@ -472,7 +400,6 @@ export default function ScannerPage() {
         return
       }
 
-      setFailCount(0)
       setConfirmForm({
         cedula:          detected.cedula,
         nombres:         detected.nombres,
@@ -482,23 +409,12 @@ export default function ScannerPage() {
         rh:              detected.rh ?? '',
         modo:            detected.modo,
       })
+    } catch {
+      showToast('red', '❌ Error al cargar la imagen')
     } finally {
       setProcessing(false)
     }
-  }, [processing, countdown, confirmForm, eventoId, showToast, addLog])
-
-  // ── Torch ──────────────────────────────────────────────────────────────────
-
-  const toggleTorch = useCallback(async () => {
-    const track = trackRef.current
-    if (!track) return
-    const next = !torchOn
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await track.applyConstraints({ advanced: [{ torch: next } as any] })
-      setTorchOn(next)
-    } catch { setHasTorch(false) }
-  }, [torchOn])
+  }, [eventoId, showToast, addLog, tReady])
 
   // ── Confirm save ──────────────────────────────────────────────────────────
 
@@ -520,7 +436,7 @@ export default function ScannerPage() {
       })
       showToast('green', `✅ Registrado: ${confirmForm.apellidos} ${confirmForm.nombres}`)
       setConfirmForm(null)
-      setConfirmError('')
+      setDebugLog([])
     } catch (err: unknown) {
       setConfirmError((err as { message?: string }).message ?? 'Error al guardar')
     } finally {
@@ -559,170 +475,102 @@ export default function ScannerPage() {
     }
   }
 
-  // ── Camera error screen ────────────────────────────────────────────────────
-
-  if (camError) {
-    return (
-      <div className="fixed inset-0 bg-black flex items-center justify-center z-50 p-6">
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-6 text-center max-w-xs w-full">
-          <p className="text-4xl mb-3">📷</p>
-          <p className="text-white font-semibold mb-2">Sin acceso a la cámara</p>
-          <p className="text-zinc-400 text-sm mb-5">{camError}</p>
-          <button onClick={() => router.back()}
-            className="w-full py-2.5 rounded-xl bg-white/10 text-white text-sm hover:bg-white/15 transition">
-            ← Volver
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   const FIELD = 'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
 
   return (
-    <div className="fixed inset-0 bg-black z-50 overflow-hidden select-none">
+    <div className="fixed inset-0 bg-[#0a0a0a] z-50 overflow-hidden flex flex-col">
 
-      {/* Camera preview — tap to focus */}
-      <video
-        ref={videoRef}
-        className="absolute inset-0 w-full h-full object-cover"
-        autoPlay playsInline muted
-        onClick={handleFocus}
+      {/* Hidden native file input */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        onChange={handleImageCapture}
       />
 
-      {/* Vignette */}
-      <div className="absolute inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse at center, transparent 38%, rgba(0,0,0,0.72) 100%)' }} />
-
-      {/* Card guide window — also focusable */}
-      <div className="absolute inset-0 flex items-center justify-center"
-        style={{ paddingBottom: '10vh' }}
-        onClick={handleFocus}>
-        <div style={{
-          width: 'min(88vw, 380px)', height: 'min(56vw, 240px)',
-          border: '1.5px solid rgba(255,255,255,0.38)',
-          borderRadius: 10,
-          boxShadow: '0 0 0 9999px rgba(0,0,0,0.52)',
-          position: 'relative',
-        }}>
-          {(['tl','tr','bl','br'] as const).map(c => (
-            <div key={c} className={`absolute w-7 h-7 border-white border-2 ${
-              c === 'tl' ? 'top-0 left-0 rounded-tl border-r-0 border-b-0' :
-              c === 'tr' ? 'top-0 right-0 rounded-tr border-l-0 border-b-0' :
-              c === 'bl' ? 'bottom-0 left-0 rounded-bl border-r-0 border-t-0' :
-                           'bottom-0 right-0 rounded-br border-l-0 border-t-0'
-            }`} />
-          ))}
-        </div>
-      </div>
-
-      {/* Hint below window */}
-      <div className="absolute inset-x-0 flex justify-center pointer-events-none"
-        style={{ top: '50%', marginTop: 'calc(min(28vw, 120px) - 9vh + 14px)' }}>
-        <p className="text-white/45 text-xs tracking-wide">Apunta al reverso · toca para enfocar</p>
-      </div>
-
-      {/* On-screen debug log */}
-      {debugLog.length > 0 && (
-        <div
-          className="absolute inset-x-3 z-10 pointer-events-none"
-          style={{ top: '50%', marginTop: 'calc(min(28vw, 120px) - 9vh + 32px)' }}
-        >
-          <div className="bg-black/70 rounded-xl px-2 py-1.5 space-y-0.5">
-            {debugLog.map((line, i) => (
-              <p key={i} className="text-yellow-300 text-[9px] font-mono leading-tight truncate">{line}</p>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className="absolute top-0 inset-x-0 z-10 flex items-start justify-between px-4 pt-10 pb-4">
-        <div className="flex items-start gap-2">
-          <button
-            onClick={() => router.back()}
-            className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white shrink-0 text-lg"
-          >‹</button>
-          <div className="bg-black/60 backdrop-blur-md rounded-2xl px-3 py-2 max-w-[55vw]">
-            <p className="text-white font-semibold text-sm leading-tight truncate">{evento?.nombre ?? '…'}</p>
-            <p className="text-zinc-400 text-xs mt-0.5">{total} registrado{total !== 1 ? 's' : ''}</p>
-          </div>
+      <div className="flex items-start gap-3 px-4 pt-10 pb-4 flex-shrink-0">
+        <button
+          onClick={() => router.back()}
+          className="w-10 h-10 rounded-full bg-white/8 flex items-center justify-center text-white shrink-0 text-lg"
+        >‹</button>
+        <div className="min-w-0">
+          <p className="text-white font-semibold text-base leading-tight truncate">{evento?.nombre ?? '…'}</p>
+          <p className="text-zinc-500 text-sm mt-0.5">{total} registrado{total !== 1 ? 's' : ''}</p>
         </div>
       </div>
 
-      {/* ── Bottom bar ──────────────────────────────────────────────────── */}
-      <div className="absolute bottom-0 inset-x-0 z-10 px-4 pt-3 pb-10">
-        {/* Retry panel after 2 consecutive failures */}
-        {failCount >= 2 && !processing && !countdown && !confirmForm && (
-          <div className="flex gap-2 mb-3">
+      {/* ── Main card ───────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-10 gap-6">
+
+        {/* Icon */}
+        <div className="w-28 h-28 rounded-3xl bg-white/5 border border-white/10 flex items-center justify-center text-6xl">
+          {processing ? (
+            <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+          ) : '📷'}
+        </div>
+
+        {/* Instructions */}
+        <div className="text-center max-w-xs">
+          <p className="text-white font-semibold text-lg mb-3">
+            {processing ? 'Procesando…' : 'Toma una foto de la cédula'}
+          </p>
+          {!processing && (
+            <>
+              <div className="bg-white/5 border border-white/8 rounded-2xl p-4 text-left space-y-2 mb-1">
+                <p className="text-zinc-300 text-sm">
+                  <span className="font-semibold text-white">Cédula vieja</span>
+                  {' '}— apunta al código de barras
+                </p>
+                <div className="h-px bg-white/8" />
+                <p className="text-zinc-300 text-sm">
+                  <span className="font-semibold text-white">Cédula nueva</span>
+                  {' '}— apunta a las líneas {`<<<`}
+                </p>
+              </div>
+              <p className="text-zinc-600 text-xs mt-2">
+                Buena luz · cédula plana · sin reflejo
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* CTA buttons */}
+        {!processing && (
+          <div className="w-full max-w-xs space-y-3">
             <button
-              onClick={() => { setFailCount(0); handleCapture() }}
-              className="flex-1 py-4 rounded-2xl bg-white/10 backdrop-blur-md text-white font-semibold text-sm active:scale-95 transition-all"
+              onClick={() => { setDebugLog([]); inputRef.current?.click() }}
+              disabled={!!confirmForm}
+              className="w-full py-4 rounded-2xl bg-emerald-600 text-white font-bold text-lg active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg shadow-emerald-900/40"
             >
-              📷 Reintentar
+              📷 Tomar foto
             </button>
             <button
               onClick={() => setShowManual(true)}
-              className="flex-1 py-4 rounded-2xl bg-emerald-600 text-white font-semibold text-sm active:scale-95 transition-all"
+              className="w-full py-3.5 rounded-2xl bg-white/8 border border-white/10 text-white/70 font-semibold text-sm active:scale-95 transition-all flex items-center justify-center gap-2"
             >
               ✏️ Ingresar manualmente
             </button>
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          {/* Capture */}
-          <button
-            onClick={handleCapture}
-            disabled={processing || countdown || !!confirmForm}
-            className="flex-1 h-16 rounded-2xl bg-white text-black font-bold text-lg flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50 shadow-xl"
-          >
-            {countdown ? (
-              <span className="text-sm font-semibold">Capturando en 1…</span>
-            ) : processing ? (
-              <>
-                <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                <span className="text-sm font-semibold">Procesando…</span>
-              </>
-            ) : '📸 Capturar'}
-          </button>
+        {/* Tesseract status */}
+        <p className="text-zinc-700 text-[10px]">
+          OCR: {tReady ? '✓ listo' : 'cargando…'}
+        </p>
 
-          {/* Focus */}
-          <button
-            onClick={() => handleFocus()}
-            className="w-12 h-16 rounded-2xl bg-black/60 backdrop-blur-md flex items-center justify-center text-base text-white/70 active:scale-90 transition-all"
-            title="Enfocar"
-          >🔍</button>
-
-          {/* Flash */}
-          <button
-            onClick={hasTorch ? toggleTorch : undefined}
-            className={`w-12 h-16 rounded-2xl flex items-center justify-center text-xl active:scale-90 transition-all ${
-              torchOn ? 'bg-yellow-400 text-black' : 'bg-black/60 backdrop-blur-md text-white/70'
-            } ${!hasTorch ? 'opacity-30 pointer-events-none' : ''}`}
-          >⚡</button>
-
-          {/* Manual */}
-          <button
-            onClick={() => setShowManual(true)}
-            className="w-12 h-16 rounded-2xl bg-black/60 backdrop-blur-md flex items-center justify-center text-xl text-white/70 active:scale-90 transition-all"
-          >✏️</button>
-        </div>
+        {/* Debug log */}
+        {debugLog.length > 0 && (
+          <div className="w-full max-w-xs bg-black/60 border border-white/8 rounded-xl p-3 space-y-1">
+            <p className="text-zinc-600 text-[9px] font-mono mb-1">— debug —</p>
+            {debugLog.map((line, i) => (
+              <p key={i} className="text-yellow-300 text-[9px] font-mono leading-tight break-all">{line}</p>
+            ))}
+          </div>
+        )}
       </div>
-
-      {/* ── Processing / countdown overlay ───────────────────────────────── */}
-      {(processing || countdown) && (
-        <div className="absolute inset-0 z-20 bg-black/45 flex flex-col items-center justify-center gap-3 pointer-events-none">
-          {countdown ? (
-            <p className="text-white font-bold text-3xl tracking-wide drop-shadow-lg">Capturando en 1…</p>
-          ) : (
-            <>
-              <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-              <p className="text-white font-semibold text-sm tracking-wide">Procesando…</p>
-            </>
-          )}
-        </div>
-      )}
 
       {/* ── Toast ───────────────────────────────────────────────────────── */}
       {toast && (
@@ -740,7 +588,7 @@ export default function ScannerPage() {
       {/* ── Confirmation modal ───────────────────────────────────────────── */}
       {confirmForm && (
         <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-black/80"
+          <div className="absolute inset-0 bg-black/85"
             onClick={() => { setConfirmForm(null); setConfirmError('') }} />
           <div className="relative w-full max-w-md bg-[#18181b] border border-[#27272a] rounded-t-3xl sm:rounded-2xl p-6 max-h-[92dvh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
@@ -842,7 +690,6 @@ export default function ScannerPage() {
                 ✕
               </button>
             </div>
-
             <form onSubmit={handleManual} className="space-y-3">
               <div>
                 <label className="block text-xs text-zinc-400 mb-1.5">Número de cédula *</label>
