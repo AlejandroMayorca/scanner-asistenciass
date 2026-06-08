@@ -83,8 +83,16 @@ export async function registrarAsistencia(
   data: Omit<Asistencia, 'id' | 'fechaHora'>,
 ): Promise<void> {
   await addDoc(collection(db, 'eventos', eventoId, 'asistencias'), {
-    ...data,
-    fechaHora: serverTimestamp(),
+    cedula:          data.cedula          || '',
+    nombres:         data.nombres         || '',
+    apellidos:       data.apellidos       || '',
+    fechaNacimiento: data.fechaNacimiento || '',
+    edad:            data.edad            || 0,
+    sexo:            data.sexo            || '',
+    rh:              data.rh              || '',
+    modo:            data.modo            || 'MANUAL',
+    eventoId,
+    fechaHora:       serverTimestamp(),
   })
 }
 
