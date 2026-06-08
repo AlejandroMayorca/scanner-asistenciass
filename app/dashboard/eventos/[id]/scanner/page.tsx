@@ -133,9 +133,12 @@ function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } 
 }
 
 function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
-  // ── Cédula: line 1, positions 5–13 (9 chars) ─────────────────────────────
-  const cedula = l1.slice(5, 14).replace(/</g, '')
-  if (cedula.length < 5 || !/^\d+$/.test(cedula)) return null
+  // ── Cédula: line 2, digits immediately after "COL" ───────────────────────
+  // Example line 2: 0503291M3306149COL1077721837<6  →  cedula = "1077721837"
+  const colIdx = l2.indexOf('COL')
+  if (colIdx < 0) return null
+  const cedula = l2.slice(colIdx + 3).match(/^\d+/)?.[0] ?? ''
+  if (cedula.length < 5) return null
 
   // ── Date of birth: line 2, positions 0–5 ─────────────────────────────────
   const dob  = parseDobMrz(l2.slice(0, 6))
@@ -274,7 +277,7 @@ export default function ScannerPage() {
   const mrzTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // UI state
-  const [mode,       setMode]       = useState<'PDF417' | 'MRZ'>('PDF417')
+  const [lastMode,   setLastMode]   = useState<'PDF417' | 'MRZ' | null>(null)
   const [torchOn,    setTorchOn]    = useState(false)
   const [hasTorch,   setHasTorch]   = useState(false)
   const [mrzReady,   setMrzReady]   = useState(false)
@@ -303,6 +306,7 @@ export default function ScannerPage() {
     if (processingRef.current || !activeRef.current) return
     processingRef.current = true
     activeRef.current = false
+    setLastMode(c.modo)
     setConfirmForm({
       cedula:          c.cedula,
       nombres:         c.nombres,
@@ -458,7 +462,7 @@ export default function ScannerPage() {
           }
         }, 400)
 
-        // ── MRZ (Tesseract) interval: 1000ms ────────────────────────────────
+        // ── MRZ (Tesseract) interval: 1200ms ────────────────────────────────
         // Processes full frame — MRZ may be anywhere in the camera view.
         mrzTimerRef.current = setInterval(async () => {
           if (!alive || processingRef.current || !activeRef.current) return
@@ -478,7 +482,7 @@ export default function ScannerPage() {
           } finally {
             mrzBusyRef.current = false
           }
-        }, 1000)
+        }, 1200)
 
       } catch {
         if (alive) setCamError('No se pudo acceder a la cámara. Verifica los permisos.')
@@ -605,14 +609,12 @@ export default function ScannerPage() {
             ))}
         </div>
 
-        {/* Mode hint */}
+        {/* Hint */}
         <p
           className="absolute w-full text-center text-white/55 text-xs px-8"
           style={{ top: '50%', transform: 'translateY(calc(-60% + min(29vw, 125px) + 14px))' }}
         >
-          {mode === 'PDF417'
-            ? 'Cédula VIEJA — apunta al reverso (código de barras)'
-            : 'Cédula NUEVA — apunta al reverso (zona >>><<<)'}
+          Cédula vieja o nueva — apunta al reverso
         </p>
       </div>
 
@@ -653,29 +655,17 @@ export default function ScannerPage() {
       {/* ── Bottom bar ────────────────────────────────────────────────────── */}
       <div className="absolute bottom-0 inset-x-0 z-10 px-4 pt-4 pb-8 bg-gradient-to-t from-black/85 via-black/40 to-transparent">
         <div className="flex gap-2 mb-3">
-          {/* Mode: Frente (PDF417) */}
-          <button
-            onClick={() => setMode('PDF417')}
-            className={`flex-1 py-3.5 rounded-2xl text-sm font-semibold transition-all active:scale-95 ${
-              mode === 'PDF417'
-                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/40'
-                : 'bg-white/10 text-white/70'
-            }`}
-          >
-            Vieja (PDF417)
-          </button>
-
-          {/* Mode: Reverso (MRZ) */}
-          <button
-            onClick={() => setMode('MRZ')}
-            className={`flex-1 py-3.5 rounded-2xl text-sm font-semibold transition-all active:scale-95 ${
-              mode === 'MRZ'
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/40'
-                : 'bg-white/10 text-white/70'
-            }`}
-          >
-            Nueva (MRZ)
-          </button>
+          {/* Last-detected mode badge (read-only) */}
+          <div className="flex-1 flex items-center justify-center py-3.5 rounded-2xl bg-white/5 border border-white/10 gap-2">
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+              lastMode === 'PDF417' ? 'bg-blue-500/30 text-blue-300' :
+              lastMode === 'MRZ'   ? 'bg-purple-500/30 text-purple-300' :
+                                     'bg-white/10 text-white/30'
+            }`}>
+              {lastMode ?? '—'}
+            </span>
+            <span className="text-white/40 text-xs">detectado</span>
+          </div>
 
           {/* Flash */}
           <button
@@ -698,9 +688,8 @@ export default function ScannerPage() {
           </button>
         </div>
 
-        {/* Both modes always active indicator */}
         <p className="text-center text-white/35 text-[11px] mb-1">
-          PDF417 + OCR activos simultáneamente
+          PDF417 + MRZ activos simultáneamente
         </p>
 
         {lastReg && (
