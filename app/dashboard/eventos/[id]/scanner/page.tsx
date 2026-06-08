@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { BrowserMultiFormatReader } from '@zxing/browser'
-import { BarcodeFormat, DecodeHintType } from '@zxing/library'
 import { doc, getDoc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../../../../lib/firebase'
 import { registrarAsistencia, checkDuplicado } from '../../../../lib/firestore'
@@ -49,13 +47,6 @@ interface ConfirmForm {
 }
 
 type ToastState = { color: 'red' | 'yellow' | 'green'; msg: string } | null
-
-// ─── ZXing hints ──────────────────────────────────────────────────────────────
-
-const HINTS = new Map<DecodeHintType, unknown>([
-  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.PDF_417, BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX]],
-  [DecodeHintType.TRY_HARDER, true],
-])
 
 // ─── PDF417 parser (cédula vieja) ─────────────────────────────────────────────
 
@@ -194,7 +185,6 @@ export default function ScannerPage() {
   const router = useRouter()
 
   const inputRef   = useRef<HTMLInputElement>(null)
-  const readerRef  = useRef<BrowserMultiFormatReader | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tWorkerRef = useRef<any>(null)
   const tReadyRef  = useRef(false)
@@ -228,7 +218,6 @@ export default function ScannerPage() {
 
   useEffect(() => {
     let alive = true
-    readerRef.current = new BrowserMultiFormatReader(HINTS)
 
     const initTesseract = async () => {
       try {
@@ -283,109 +272,78 @@ export default function ScannerPage() {
   const handleImageCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    e.target.value = '' // reset so same photo can be retaken
+    e.target.value = ''
 
     setProcessing(true)
     setDebugLog([])
 
     try {
-      // Load image from file
+      // Load image
       const url = URL.createObjectURL(file)
       const img  = new Image()
       img.src    = url
       await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej() })
-      addLog(`[Foto] ${img.naturalWidth}×${img.naturalHeight}px`)
-
       const W = img.naturalWidth, H = img.naturalHeight
+      addLog(`[foto] ${W}×${H}px`)
 
-      // ── ZXing attempt 1: original image element (best for iOS) ──────────
-      let zxingText: string | null = null
-      try {
-        const res = await readerRef.current!.decodeFromImageElement(img)
-        zxingText = res.getText()
-        addLog(`[ZXing orig] "${zxingText.slice(0, 80)}"`)
-      } catch {
-        addLog('[ZXing orig] sin detección')
-      }
-
-      // ── ZXing attempt 2: high-contrast grayscale canvas ─────────────────
-      if (!zxingText) {
-        const c2 = document.createElement('canvas')
-        c2.width = W; c2.height = H
-        const x2 = c2.getContext('2d')!
-        x2.filter = 'contrast(2) grayscale(1)'
-        x2.drawImage(img, 0, 0)
-        x2.filter = 'none'
-        try {
-          const res = await readerRef.current!.decodeFromCanvas(c2)
-          zxingText = res.getText()
-          addLog(`[ZXing contraste] "${zxingText.slice(0, 80)}"`)
-        } catch {
-          addLog('[ZXing contraste] sin detección')
-        }
-      }
-
-      // ── ZXing attempt 3: bottom 35% crop (PDF417 en cédula vieja) ───────
-      if (!zxingText) {
-        const sh = Math.floor(H * 0.35), sy = Math.floor(H * 0.65)
-        const c3 = document.createElement('canvas')
-        c3.width = W; c3.height = sh
-        c3.getContext('2d')!.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
-        try {
-          const res = await readerRef.current!.decodeFromCanvas(c3)
-          zxingText = res.getText()
-          addLog(`[ZXing inferior] "${zxingText.slice(0, 80)}"`)
-        } catch {
-          addLog('[ZXing inferior] sin detección')
-        }
-      }
-
-      // ── ZXing attempt 4: bottom 35% with contrast ────────────────────────
-      if (!zxingText) {
-        const sh = Math.floor(H * 0.35), sy = Math.floor(H * 0.65)
-        const c4 = document.createElement('canvas')
-        c4.width = W; c4.height = sh
-        const x4 = c4.getContext('2d')!
-        x4.filter = 'contrast(2) brightness(1.2)'
-        x4.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
-        x4.filter = 'none'
-        try {
-          const res = await readerRef.current!.decodeFromCanvas(c4)
-          zxingText = res.getText()
-          addLog(`[ZXing inf+contraste] "${zxingText.slice(0, 80)}"`)
-        } catch {
-          addLog('[ZXing inf+contraste] sin detección')
-        }
-      }
-
+      // Resize to max 2000px to limit payload, keep aspect ratio
+      const MAX = 2000
+      const scale = Math.min(1, MAX / Math.max(W, H))
+      const cW = Math.round(W * scale), cH = Math.round(H * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = cW; canvas.height = cH
+      canvas.getContext('2d')!.drawImage(img, 0, 0, cW, cH)
       URL.revokeObjectURL(url)
 
+      const base64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1]
+      addLog(`[base64] ${Math.round(base64.length / 1024)}kb`)
+
+      // ── Server-side ZXing ─────────────────────────────────────────────────
       let detected: Cedula | null = null
 
-      if (zxingText) {
-        detected = parseBarcode(zxingText)
-        if (!detected) addLog(`[Parse] formato no reconocido: "${zxingText.slice(0, 40)}"`)
+      try {
+        addLog('[api] enviando al servidor…')
+        const resp = await fetch('/api/scan', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ imageBase64: base64 }),
+        })
+        const data = await resp.json() as {
+          success: boolean; text?: string; attempt?: string
+          error?: string; logs?: string[]
+        }
+
+        // Show server logs
+        for (const line of data.logs ?? []) addLog(line)
+
+        if (data.success && data.text) {
+          detected = parseBarcode(data.text)
+          if (!detected) addLog(`[parse] no reconocido: "${data.text.slice(0, 40)}"`)
+        } else {
+          addLog(`[api] sin detección: ${data.error ?? ''}`)
+        }
+      } catch (fetchErr) {
+        addLog(`[api] error de red: ${String(fetchErr).slice(0, 60)}`)
       }
 
-      // ── Tesseract: bottom 45% for MRZ ────────────────────────────────────
+      // ── Tesseract fallback: bottom 45% for MRZ cédula nueva ──────────────
       if (!detected) {
         if (tReadyRef.current && tWorkerRef.current) {
           try {
-            const sy  = Math.floor(H * 0.55), sh = Math.floor(H * 0.45)
+            const sy  = Math.floor(cH * 0.55), sh = Math.floor(cH * 0.45)
             const ct  = document.createElement('canvas')
-            ct.width  = W; ct.height = sh
-            ct.getContext('2d')!.drawImage(img, 0, sy, W, sh, 0, 0, W, sh)
+            ct.width  = cW; ct.height = sh
+            ct.getContext('2d')!.drawImage(canvas, 0, sy, cW, sh, 0, 0, cW, sh)
             const { data: { text } } = await tWorkerRef.current.recognize(ct)
-            const flat = text.trim().replace(/\n/g, ' ')
-            addLog(`[Tesseract] "${flat.slice(0, 120)}"`)
+            addLog(`[ocr] "${text.trim().replace(/\n/g, ' ').slice(0, 120)}"`)
             detected = parseMrzText(text) ?? parseMrzRegex(text)
-            if (detected) addLog(`[Tesseract OK] ${detected.modo} cédula=${detected.cedula}`)
-            else addLog('[Tesseract] sin resultado')
+            if (detected) addLog(`[ocr OK] ${detected.modo} cédula=${detected.cedula}`)
+            else addLog('[ocr] sin resultado')
           } catch (err) {
-            addLog(`[Tesseract] error: ${String(err).slice(0, 60)}`)
+            addLog(`[ocr] error: ${String(err).slice(0, 60)}`)
           }
         } else {
-          addLog(`[Tesseract] ${tReady ? 'ocupado' : 'iniciando...'}`)
+          addLog(`[ocr] ${tReady ? 'ocupado' : 'iniciando…'}`)
         }
       }
 
