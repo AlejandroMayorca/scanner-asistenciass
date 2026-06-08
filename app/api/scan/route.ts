@@ -4,14 +4,7 @@ import { readBarcodes } from 'zxing-wasm/reader'
 export const runtime = 'nodejs'
 export const maxDuration = 30
 
-// ─── TypeScript port of ColombianIdCardPdf417Decoder.decode() ─────────────────
-//
-// Fuente original: colombian-cedula-reader/src/barcode/colombian_pdf417_decoder.py
-// Traducción exacta — misma lógica, mismo orden de pasos, mismos edge cases.
-//
-// Clave de encoding: Python usa latin-1 (byte N → codepoint N).
-// En Node.js, Buffer.toString('latin1') hace lo mismo: cada byte → mismo char.
-// Por eso usamos result.bytes (Uint8Array sin conversión de charset) y no result.text.
+// ─── Parsed result ────────────────────────────────────────────────────────────
 
 export interface ParsedCedula {
   cedula:    string
@@ -26,86 +19,102 @@ export interface ParsedCedula {
   rh:        string
 }
 
-function decodePdf417Bytes(raw: Uint8Array): ParsedCedula | null {
-  // Paso 1 — validar marcador PubDSK_ (exactamente como en el original Python)
+// ─── Approach A: ColombianIdCardPdf417Decoder null-byte split ─────────────────
+// Puerto exacto de colombian_pdf417_decoder.py  (Python latin-1 ≡ Node latin1)
+
+function decodePdf417NullSplit(raw: Uint8Array): ParsedCedula | null {
   const buf = Buffer.from(raw)
   if (!buf.includes(Buffer.from('PubDSK_', 'ascii'))) return null
 
-  // Paso 2 — decodificar como latin-1: byte N → char con codepoint N
-  // Equivale a: self.data.decode('latin-1') en Python
-  const str = buf.toString('latin1')
-
-  // Paso 3 — normalizar: múltiples nulos consecutivos → un solo nulo
-  // Equivale a: re.sub(b'(\x00){2,}', b'\x00', data) en Python
+  const str        = buf.toString('latin1')
   const normalized = str.replace(/\x00{2,}/g, '\x00')
-
-  // Paso 4 — dividir por nulo
-  // Equivale a: sp = data.split(b'\x00') en Python
-  let sp = normalized.split('\x00')
-
+  let   sp         = normalized.split('\x00')
   if (sp.length < 3) return null
 
-  // Paso 5 — extraer fingercard, docnum y apellido1 de sp[2]
-  // Python: if len(sp[2]) > 8: ... else: sp = sp[1:]
-  let docNumber: string
-  let lastName:  string
-
+  let docNumber: string, lastName: string
   if (sp[2].length > 8) {
-    // sp[2][0:8]  = fingercard
-    // sp[2][8:10] = reservado
-    // sp[2][10:18] = docnum
-    // sp[2][18:]   = apellido1
     docNumber = sp[2].substring(10, 18)
     lastName  = sp[2].substring(18)
   } else {
-    // Caso truncado (Windows): desplazar igual que el original
-    sp = sp.slice(1)
-    docNumber = sp[2].substring(0, 10)
-    lastName  = sp[2].substring(10)
+    sp        = sp.slice(1)
+    docNumber = sp[2]?.substring(0, 10) ?? ''
+    lastName  = sp[2]?.substring(10)    ?? ''
   }
-
   if (sp.length < 7) return null
 
-  // Paso 6 — apellido2, nombre1, nombre2
-  const secLastName = sp[3] ?? ''
-  const firstName   = sp[4] ?? ''
-  let   middleName  = sp[5] ?? ''
-
-  // Paso 7 — artefacto: si nombre2 termina en '+' o '-' es separador del RH
-  // Python: if middle_name.endswith("-") or middle_name.endswith("+"): middle_name=''; sp.insert(5, b'x')
+  let middleName = sp[5] ?? ''
   if (middleName.endsWith('-') || middleName.endsWith('+')) {
     middleName = ''
     sp = [...sp.slice(0, 5), 'x', ...sp.slice(5)]
   }
 
-  // Paso 8 — segmento de fechas/sexo/rh (sp[6])
-  const ds = sp[6] ?? ''
-
-  // Python: gender=ds[1], year=ds[2:6], month=ds[6:8], day=ds[8:10], blood=ds[16:18]
-  const gender    = ds.length > 1  ? ds[1]              : ''
-  const year      = ds.length >= 6  ? ds.substring(2, 6)  : ''
-  const month     = ds.length >= 8  ? ds.substring(6, 8)  : ''
-  const day       = ds.length >= 10 ? ds.substring(8, 10) : ''
-  const bloodType = ds.length >= 18 ? ds.substring(16, 18): ''
-
-  // Paso 9 — limpiar: quitar nulos y espacios; quitar ceros a la izquierda del doc
+  const ds    = sp[6] ?? ''
   const clean = (s: string) => s.replace(/\x00/g, '').trim()
 
+  const cedula = clean(docNumber).replace(/^0+/, '')
+  if (!/^\d{5,12}$/.test(cedula)) return null
+
   return {
-    cedula:    clean(docNumber).replace(/^0+/, ''),
+    cedula,
     apellido1: clean(lastName),
-    apellido2: clean(secLastName),
-    nombre1:   clean(firstName),
+    apellido2: clean(sp[3] ?? ''),
+    nombre1:   clean(sp[4] ?? ''),
     nombre2:   clean(middleName),
-    sexo:      clean(gender),
-    anioNac:   clean(year),
-    mesNac:    clean(month),
-    diaNac:    clean(day),
-    rh:        clean(bloodType),
+    sexo:      clean(ds.length > 1  ? ds[1]              : ''),
+    anioNac:   clean(ds.length >= 6  ? ds.substring(2, 6)  : ''),
+    mesNac:    clean(ds.length >= 8  ? ds.substring(6, 8)  : ''),
+    diaNac:    clean(ds.length >= 10 ? ds.substring(8, 10) : ''),
+    rh:        clean(ds.length >= 18 ? ds.substring(16, 18): ''),
   }
 }
 
-// ─── ZXing decode + parse ─────────────────────────────────────────────────────
+// ─── Approach B: fixed byte positions ─────────────────────────────────────────
+// Posiciones en bytes sobre la cadena latin-1 del PDF417 binario:
+//   48–58  cédula        81–104 apellido2     151–152 sexo
+//   58–80  apellido1    104–127 nombre1       152–156 año nac
+//                       127–150 nombre2       156–158 mes  158–160 día
+//                                             166–168 RH
+
+function decodePdf417Fixed(raw: Uint8Array): ParsedCedula | null {
+  if (raw.length < 170) return null
+  const str   = Buffer.from(raw).toString('latin1')
+  const clean = (s: string) => s.replace(/\x00/g, '').trim()
+
+  const cedula = clean(str.substring(48, 58)).replace(/^0+/, '')
+  if (!/^\d{5,12}$/.test(cedula)) return null
+
+  const apellido1 = clean(str.substring(58,  80))
+  const apellido2 = clean(str.substring(81,  104))
+  const nombre1   = clean(str.substring(104, 127))
+  const nombre2   = clean(str.substring(127, 150))
+  if (!apellido1 && !nombre1) return null
+
+  return {
+    cedula,
+    apellido1, apellido2,
+    nombre1,   nombre2,
+    sexo:    clean(str.substring(151, 152)),
+    anioNac: clean(str.substring(152, 156)),
+    mesNac:  clean(str.substring(156, 158)),
+    diaNac:  clean(str.substring(158, 160)),
+    rh:      clean(str.substring(166, 168)),
+  }
+}
+
+// ─── Combined parser: try both approaches ─────────────────────────────────────
+
+function parsePdf417(raw: Uint8Array, logs: string[]): ParsedCedula | null {
+  const a = decodePdf417NullSplit(raw)
+  if (a) { logs.push(`[parse] null-split OK: ${a.cedula} ${a.apellido1}`); return a }
+
+  const b = decodePdf417Fixed(raw)
+  if (b) { logs.push(`[parse] fixed-pos OK: ${b.cedula} ${b.apellido1}`); return b }
+
+  logs.push('[parse] ambos métodos fallaron')
+  return null
+}
+
+// ─── ZXing decode ─────────────────────────────────────────────────────────────
 
 async function decodeBuffer(
   buf: Buffer,
@@ -113,31 +122,24 @@ async function decodeBuffer(
   logs: string[],
 ): Promise<{ text: string; parsed: ParsedCedula | null } | null> {
   const results = await readBarcodes(buf, {
-    formats: ['PDF417', 'QRCode', 'DataMatrix'],
+    formats:   ['PDF417', 'QRCode', 'DataMatrix'],
     tryHarder: true,
   })
   const valid = results.filter(r => r.isValid)
   if (valid.length === 0) {
-    logs.push(`[srv] ${label}: sin detección`)
+    logs.push(`[zxing] ${label}: sin detección`)
     return null
   }
 
   const r   = valid[0]
   const vis = (s: string) => s.replace(/\x00/g, '□')
-  logs.push(`[srv] ${label} OK: bytes=${r.bytes?.length ?? 0} text="${vis(r.text)}"`)
+  logs.push(`[zxing] ${label} OK: bytes=${r.bytes?.length ?? 0} text="${vis(r.text).slice(0, 60)}"`)
 
-  // Usar result.bytes (Uint8Array, sin conversión de charset) como fuente primaria.
-  // Fallback a Buffer.from(text, 'latin1') si bytes no está disponible.
+  // Use raw bytes (no charset conversion) — equivalent to Python latin-1
   const rawBytes: Uint8Array = (r.bytes?.length ? r.bytes : null)
     ?? new Uint8Array(Buffer.from(r.text, 'latin1'))
 
-  const parsed = decodePdf417Bytes(rawBytes)
-  if (parsed) {
-    logs.push(`[parse] OK: cedula=${parsed.cedula} ${parsed.apellido1} ${parsed.nombre1}`)
-  } else {
-    logs.push(`[parse] PubDSK_ no encontrado o segmentos insuficientes`)
-  }
-
+  const parsed = parsePdf417(rawBytes, logs)
   return { text: r.text, parsed }
 }
 
@@ -155,13 +157,13 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(body.imageBase64 as string, 'base64')
     logs.push(`[srv] buffer ${Math.round(buffer.length / 1024)}kb`)
 
-    // Attempt 1: imagen original sin modificar
+    // Attempt 1 — imagen original
     {
       const r = await decodeBuffer(buffer, 'original', logs)
       if (r) return NextResponse.json({ success: true, ...r, logs })
     }
 
-    // Attempts 2-4: preprocesar con jimp
+    // Attempts 2-4 — variantes con jimp
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const jimpModule: any = await import('jimp')
@@ -169,8 +171,8 @@ export async function POST(req: NextRequest) {
       const img  = await Jimp.read(buffer)
       const W    = img.bitmap.width  as number
       const H    = img.bitmap.height as number
-      const sy   = Math.floor(H * 0.60)
-      const sh   = Math.floor(H * 0.40)
+      const sy   = Math.floor(H * 0.55)
+      const sh   = Math.floor(H * 0.45)
 
       const variants: Array<[string, Promise<Buffer>]> = [
         ['contraste',     img.clone().contrast(0.7).brightness(0.1).getBufferAsync('image/jpeg')],
