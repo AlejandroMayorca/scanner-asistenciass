@@ -420,7 +420,7 @@ export default function ScannerPage() {
           parsed?: {
             cedula: string; apellido1: string; apellido2: string
             nombre1: string; nombre2: string; sexo: string
-            fechaNacimiento: string; rh: string
+            anioNac: string; mesNac: string; diaNac: string; rh: string
           }
           error?: string
           logs?: string[]
@@ -431,12 +431,11 @@ export default function ScannerPage() {
         if (data.success && data.text) {
           rawServerText = data.text
 
-          // ── Python parser succeeded (primary path) ──────────────────────
-          if (data.parsed && data.parsed.cedula) {
-            const p       = data.parsed
+          // ── Server parsed (primary path) ─────────────────────────────────
+          if (data.parsed?.cedula) {
+            const p         = data.parsed
             const nombres   = [p.nombre1, p.nombre2].filter(Boolean).join(' ')
             const apellidos = [p.apellido1, p.apellido2].filter(Boolean).join(' ')
-            const fnParts   = p.fechaNacimiento?.split('-') ?? []
             detected = {
               cedula:    p.cedula,
               nombres:   cleanName(nombres),
@@ -444,11 +443,11 @@ export default function ScannerPage() {
               sexo:      p.sexo === 'M' || p.sexo === 'F' ? p.sexo as 'M' | 'F' : undefined,
               rh:        p.rh || undefined,
               modo:      'PDF417',
-              ...( fnParts.length === 3 ? buildFecha(fnParts[0], fnParts[1], fnParts[2]) ?? {} : {} ),
+              ...buildFecha(p.anioNac, p.mesNac, p.diaNac) ?? {},
             }
-            addLog(`[py✓] ${detected.apellidos} ${detected.nombres} | ${p.cedula} | ${p.fechaNacimiento}`)
+            addLog(`[srv✓] ${detected.apellidos} ${detected.nombres} | ${p.cedula} | ${p.anioNac}-${p.mesNac}-${p.diaNac}`)
 
-          // ── TypeScript fallback parsers ──────────────────────────────────
+          // ── Client TypeScript fallback parsers ───────────────────────────
           } else {
             addLog(`[txt] ${data.text.replace(/\x00/g, '□')}`)
             addLog(`[pos] ${debugPdf417Positions(data.text)}`)
