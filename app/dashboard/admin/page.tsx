@@ -41,16 +41,18 @@ const FIELD =
 type AdminTab = 'usuarios' | 'eventos' | 'backup'
 
 export default function AdminPage() {
-  const { profile } = useAuth()
+  const { profile, user } = useAuth()
   const router = useRouter()
   const [tab, setTab] = useState<AdminTab>('usuarios')
 
+  const isAdmin = profile?.rol === 'admin' || user?.email === 'admin@cedulascan.com'
+
   // Redirect non-admins
   useEffect(() => {
-    if (profile && profile.rol !== 'admin') router.replace('/dashboard/eventos')
-  }, [profile, router])
+    if (profile && !isAdmin) router.replace('/dashboard/eventos')
+  }, [profile, isAdmin, router])
 
-  if (!profile || profile.rol !== 'admin') {
+  if (!profile || !isAdmin) {
     return (
       <div className="flex items-center justify-center h-dvh text-zinc-600">
         <Shield size={40} className="opacity-30" />

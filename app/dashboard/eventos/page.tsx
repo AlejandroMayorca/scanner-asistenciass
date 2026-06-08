@@ -30,8 +30,8 @@ const FIELD =
   'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
 
 export default function EventosPage() {
-  const { profile } = useAuth()
-  const isAdmin = profile?.rol === 'admin'
+  const { profile, user } = useAuth()
+  const isAdmin = profile?.rol === 'admin' || user?.email === 'admin@cedulascan.com'
 
   const [eventos, setEventos] = useState<(Evento & { total: number })[]>([])
   const [loading, setLoading] = useState(true)
