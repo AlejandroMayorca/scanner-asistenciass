@@ -16,6 +16,10 @@ function capitalize(s: string): string {
   return s.toLowerCase().replace(/\b[a-záéíóúñ]/gi, c => c.toUpperCase())
 }
 
+function cleanMrzName(s: string): string {
+  return capitalize(s.replace(/[^A-Za-z\s]/g, '').trim())
+}
+
 function calcEdad(fechaNacimiento: string): number {
   const [y, m, d] = fechaNacimiento.split('-').map(Number)
   const hoy = new Date()
@@ -130,11 +134,7 @@ function parseDobMrz(yymmdd: string): { fechaNacimiento: string; edad: number } 
 
 function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
   // ── Cédula: line 1, positions 5–13 (9 chars) ─────────────────────────────
-  let cedula = l1.slice(5, 14).replace(/</g, '')
-  // Remove leading zeros if total digits < 10
-  if (/^0/.test(cedula) && cedula.length < 10) {
-    cedula = cedula.replace(/^0+/, '') || cedula
-  }
+  const cedula = l1.slice(5, 14).replace(/</g, '')
   if (cedula.length < 5 || !/^\d+$/.test(cedula)) return null
 
   // ── Date of birth: line 2, positions 0–5 ─────────────────────────────────
@@ -149,19 +149,18 @@ function parseMrzLines(l1: string, l2: string, l3: string): Cedula | null {
   const sepIdx  = nameRaw.indexOf('<<')
   let apellidos = '', nombres = ''
   if (sepIdx >= 0) {
-    apellidos = nameRaw.slice(0, sepIdx).replace(/<+/g, ' ').trim()
-    nombres   = nameRaw.slice(sepIdx + 2).replace(/<+/g, ' ').trim()
+    apellidos = cleanMrzName(nameRaw.slice(0, sepIdx).replace(/<+/g, ' '))
+    nombres   = cleanMrzName(nameRaw.slice(sepIdx + 2).replace(/<+/g, ' '))
   } else {
-    // No << separator — treat everything as apellidos
-    apellidos = nameRaw.replace(/<+/g, ' ').trim()
+    apellidos = cleanMrzName(nameRaw.replace(/<+/g, ' '))
   }
 
   if (!apellidos && !cedula) return null
 
   return {
     cedula,
-    nombres:   capitalize(nombres),
-    apellidos: capitalize(apellidos),
+    nombres,
+    apellidos,
     sexo,
     modo: 'MRZ',
     ...(dob ?? {}),
@@ -229,6 +228,18 @@ function parseMrz(ocrText: string): Cedula | null {
   return null
 }
 
+// ── Confirm form ──────────────────────────────────────────────────────────────
+
+interface ConfirmForm {
+  cedula: string
+  nombres: string
+  apellidos: string
+  sexo: 'M' | 'F' | ''
+  fechaNacimiento: string
+  rh: string
+  modo: 'PDF417' | 'MRZ'
+}
+
 // ── ZXing hints ───────────────────────────────────────────────────────────────
 
 const PDF417_HINTS = new Map<DecodeHintType, unknown>([
@@ -267,8 +278,10 @@ export default function ScannerPage() {
   const [torchOn,    setTorchOn]    = useState(false)
   const [hasTorch,   setHasTorch]   = useState(false)
   const [mrzReady,   setMrzReady]   = useState(false)
-  const [saving,     setSaving]     = useState(false)
-  const [banner,     setBanner]     = useState<BannerState | null>(null)
+  const [confirmForm,   setConfirmForm]   = useState<ConfirmForm | null>(null)
+  const [confirmSaving, setConfirmSaving] = useState(false)
+  const [confirmError,  setConfirmError]  = useState('')
+  const [banner,        setBanner]        = useState<BannerState | null>(null)
   const [lastReg,    setLastReg]    = useState('')
   const [total,      setTotal]      = useState(0)
   const [evento,     setEvento]     = useState<Evento | null>(null)
@@ -286,49 +299,71 @@ export default function ScannerPage() {
 
   // ── handleDetected ────────────────────────────────────────────────────────
 
-  const handleDetected = useCallback(async (c: Cedula) => {
+  const handleDetected = useCallback((c: Cedula) => {
     if (processingRef.current || !activeRef.current) return
     processingRef.current = true
     activeRef.current = false
-    setSaving(true)
+    setConfirmForm({
+      cedula:          c.cedula,
+      nombres:         c.nombres,
+      apellidos:       c.apellidos,
+      sexo:            c.sexo ?? '',
+      fechaNacimiento: c.fechaNacimiento ?? '',
+      rh:              c.rh ?? '',
+      modo:            c.modo,
+    })
+  }, [])
 
+  useEffect(() => { onDetectedRef.current = handleDetected }, [handleDetected])
+
+  const handleConfirm = async () => {
+    if (!confirmForm) return
+    setConfirmSaving(true)
+    setConfirmError('')
     try {
-      const dup = await checkDuplicado(eventoId, c.cedula)
+      const dup = await checkDuplicado(eventoId, confirmForm.cedula)
       if (dup) {
-        setBanner({ type: 'dup', msg: `⚠️ Ya registrado: ${c.apellidos} ${c.nombres}` })
-      } else {
-        await registrarAsistencia(eventoId, {
-          cedula:          c.cedula,
-          nombres:         c.nombres,
-          apellidos:       c.apellidos,
-          sexo:            c.sexo,
-          fechaNacimiento: c.fechaNacimiento,
-          edad:            c.edad,
-          rh:              c.rh,
-          modo:            c.modo,
-        })
-        const t = await getTotalAsistencias(eventoId)
-        setTotal(t)
-        setLastReg(`${c.apellidos} ${c.nombres}`)
-        setBanner({
-          type: 'ok',
-          msg: `✅ ${c.apellidos} ${c.nombres}${c.edad ? ` — ${c.edad} años` : ''}`,
-        })
+        setConfirmError(`⚠️ ${confirmForm.apellidos} ${confirmForm.nombres} ya está registrado`)
+        return
       }
-    } catch (err: unknown) {
-      const e = err as { code?: string; message?: string }
-      setBanner({ type: 'err', msg: `Error (${e.code ?? '?'}): ${e.message ?? ''}` })
-    } finally {
-      setSaving(false)
+      const edad = confirmForm.fechaNacimiento ? calcEdad(confirmForm.fechaNacimiento) : 0
+      await registrarAsistencia(eventoId, {
+        cedula:          confirmForm.cedula,
+        nombres:         confirmForm.nombres,
+        apellidos:       confirmForm.apellidos,
+        sexo:            (confirmForm.sexo || undefined) as 'M' | 'F' | undefined,
+        fechaNacimiento: confirmForm.fechaNacimiento,
+        edad,
+        rh:              confirmForm.rh,
+        modo:            confirmForm.modo,
+      })
+      const t = await getTotalAsistencias(eventoId)
+      setTotal(t)
+      setLastReg(`${confirmForm.apellidos} ${confirmForm.nombres}`)
+      setBanner({
+        type: 'ok',
+        msg:  `✅ ${confirmForm.apellidos} ${confirmForm.nombres}${edad ? ` — ${edad} años` : ''}`,
+      })
+      setConfirmForm(null)
       setTimeout(() => {
         setBanner(null)
         processingRef.current = false
         activeRef.current = true
       }, 3000)
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string }
+      setConfirmError(`Error (${e.code ?? '?'}): ${e.message ?? ''}`)
+    } finally {
+      setConfirmSaving(false)
     }
-  }, [eventoId])
+  }
 
-  useEffect(() => { onDetectedRef.current = handleDetected }, [handleDetected])
+  const handleCancelConfirm = () => {
+    setConfirmForm(null)
+    setConfirmError('')
+    processingRef.current = false
+    activeRef.current = true
+  }
 
   // ── Tesseract init ────────────────────────────────────────────────────────
 
@@ -675,13 +710,6 @@ export default function ScannerPage() {
         )}
       </div>
 
-      {/* ── Saving spinner ─────────────────────────────────────────────────── */}
-      {saving && (
-        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-          <div className="w-16 h-16 rounded-full border-2 border-white/20 border-t-white animate-spin" />
-        </div>
-      )}
-
       {/* ── Result banner ──────────────────────────────────────────────────── */}
       {banner && (
         <div className="absolute inset-x-5 z-30" style={{ top: '50%', transform: 'translateY(-50%)' }}>
@@ -693,6 +721,106 @@ export default function ScannerPage() {
             }`}
           >
             <p className="font-bold text-lg leading-snug">{banner.msg}</p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirmation modal ─────────────────────────────────────────────── */}
+      {confirmForm && !banner && (
+        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-black/85" />
+          <div className="relative w-full max-w-md bg-[#18181b] border border-[#27272a] rounded-t-3xl sm:rounded-2xl p-6 max-h-[92dvh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-white text-base">Confirmar registro</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                confirmForm.modo === 'PDF417' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+              }`}>{confirmForm.modo}</span>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1.5">Número de cédula</label>
+                <input
+                  value={confirmForm.cedula}
+                  onChange={e => setConfirmForm(f => f ? { ...f, cedula: e.target.value } : f)}
+                  className={FIELD_M}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Nombres</label>
+                  <input
+                    value={confirmForm.nombres}
+                    onChange={e => setConfirmForm(f => f ? { ...f, nombres: e.target.value } : f)}
+                    className={FIELD_M}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Apellidos</label>
+                  <input
+                    value={confirmForm.apellidos}
+                    onChange={e => setConfirmForm(f => f ? { ...f, apellidos: e.target.value } : f)}
+                    className={FIELD_M}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Fecha nacimiento</label>
+                  <input
+                    type="date"
+                    value={confirmForm.fechaNacimiento}
+                    onChange={e => setConfirmForm(f => f ? { ...f, fechaNacimiento: e.target.value } : f)}
+                    className={`${FIELD_M} [color-scheme:dark]`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Sexo</label>
+                  <select
+                    value={confirmForm.sexo}
+                    onChange={e => setConfirmForm(f => f ? { ...f, sexo: e.target.value as 'M' | 'F' | '' } : f)}
+                    className={`${FIELD_M} [color-scheme:dark]`}
+                  >
+                    <option value="">—</option>
+                    <option value="M">Masculino</option>
+                    <option value="F">Femenino</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1.5">RH (opcional)</label>
+                <input
+                  value={confirmForm.rh}
+                  onChange={e => setConfirmForm(f => f ? { ...f, rh: e.target.value } : f)}
+                  placeholder="O+"
+                  className={FIELD_M}
+                />
+              </div>
+
+              {confirmError && (
+                <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+                  {confirmError}
+                </p>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={handleCancelConfirm}
+                  className="flex-1 py-3 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+                >
+                  ❌ Cancelar
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  disabled={confirmSaving}
+                  className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-60 transition flex items-center justify-center gap-2"
+                >
+                  {confirmSaving
+                    ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Guardando…</>
+                    : '✅ Confirmar'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

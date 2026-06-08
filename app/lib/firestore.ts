@@ -78,6 +78,10 @@ export async function checkDuplicado(eventoId: string, cedula: string): Promise<
   return !snap.empty
 }
 
+export async function eliminarAsistencia(eventoId: string, asistenciaId: string): Promise<void> {
+  await deleteDoc(doc(db, 'eventos', eventoId, 'asistencias', asistenciaId))
+}
+
 export async function registrarAsistencia(
   eventoId: string,
   data: Omit<Asistencia, 'id' | 'fechaHora'>,

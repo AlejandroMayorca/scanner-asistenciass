@@ -5,9 +5,9 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, BarChart2, Camera, ClipboardList, FileSpreadsheet,
-  MapPin, Pencil, Users,
+  MapPin, Pencil, Trash2, Users,
 } from 'lucide-react'
-import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, toDate } from '../../../lib/firestore'
+import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, toDate } from '../../../lib/firestore'
 import { exportarExcel } from '../../../lib/export'
 import { Spinner } from '../../../components/ui/Spinner'
 import type { Evento, Asistencia } from '../../../lib/types'
@@ -237,10 +237,12 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
-  useEffect(() => {
-    getAsistencias(eventoId).then(a => { setAsistencias(a); setLoading(false) })
-  }, [eventoId])
+  const load = () => getAsistencias(eventoId).then(a => { setAsistencias(a); setLoading(false) })
+
+  useEffect(() => { load() }, [eventoId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = useMemo(
     () =>
@@ -262,6 +264,18 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
     if (!evento) return
     setExporting(true)
     try { await exportarExcel(asistencias, evento) } finally { setExporting(false) }
+  }
+
+  const handleDelete = async () => {
+    if (!confirmDel) return
+    setDeleting(true)
+    try {
+      await eliminarAsistencia(eventoId, confirmDel)
+      setConfirmDel(null)
+      load()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (loading) return <div className="flex justify-center py-16"><Spinner size="lg" /></div>
@@ -306,12 +320,13 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                 <th className="text-left px-4 py-3 font-medium hidden md:table-cell">RH</th>
                 <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Hora</th>
                 <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Modo</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-14 text-zinc-600">
+                  <td colSpan={9} className="text-center py-14 text-zinc-600">
                     {search ? 'Sin resultados' : 'Sin asistencias registradas'}
                   </td>
                 </tr>
@@ -330,7 +345,7 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                     <td className="px-4 py-3 hidden sm:table-cell text-zinc-300 text-xs">
                       {a.sexo === 'M' ? '♂ M' : a.sexo === 'F' ? '♀ F' : '—'}
                     </td>
-                    <td className="px-4 py-3 hidden md:table-cell text-zinc-500 text-xs">{a.rh ?? '—'}</td>
+                    <td className="px-4 py-3 hidden md:table-cell text-zinc-500 text-xs">{a.rh || '—'}</td>
                     <td className="px-4 py-3 hidden md:table-cell text-zinc-500 text-xs whitespace-nowrap">
                       {format(toDate(a.fechaHora), 'HH:mm:ss')}
                     </td>
@@ -342,6 +357,15 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                       }`}>
                         {a.modo}
                       </span>
+                    </td>
+                    <td className="px-2 py-3">
+                      <button
+                        onClick={() => setConfirmDel(a.id!)}
+                        className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition"
+                        title="Eliminar registro"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -366,6 +390,27 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
           </div>
         )}
       </div>
+
+      {/* Confirm delete dialog */}
+      {confirmDel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
+          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
+            <p className="font-semibold text-white mb-2">¿Eliminar este registro?</p>
+            <p className="text-zinc-400 text-sm mb-5">Esta acción no se puede deshacer.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDel(null)}
+                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                No
+              </button>
+              <button onClick={handleDelete} disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-60 transition flex items-center justify-center gap-2">
+                {deleting ? <><Spinner size="sm" /> Eliminando…</> : 'Sí, eliminar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
