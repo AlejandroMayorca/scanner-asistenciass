@@ -25,7 +25,16 @@ export async function POST(req: NextRequest) {
       const valid = results.filter(r => r.isValid)
       if (valid.length > 0) {
         const text = valid[0].text
-        logs.push(`[srv] OK buffer: "${text}"`)
+        const vis = (s: string) => s.replace(/\x00/g, '□')
+        logs.push(`[srv] OK buffer len=${text.length}`)
+        logs.push(`[srv] txt: "${vis(text)}"`)
+        logs.push(`[srv] p0-20:"${vis(text.substring(0,20))}"`)
+        logs.push(`[srv] p48-58:"${vis(text.substring(48,58))}"`)
+        logs.push(`[srv] p58-80:"${vis(text.substring(58,80))}"`)
+        logs.push(`[srv] p104-127:"${vis(text.substring(104,127))}"`)
+        logs.push(`[srv] p127-150:"${vis(text.substring(127,150))}"`)
+        logs.push(`[srv] p151-160:"${vis(text.substring(151,160))}"`)
+        logs.push(`[srv] p166-168:"${vis(text.substring(166,168))}"`)
         return NextResponse.json({ success: true, text, raw: text, logs })
       }
       logs.push(`[srv] buffer: sin detección (${results[0]?.error ?? 'sin error'})`)

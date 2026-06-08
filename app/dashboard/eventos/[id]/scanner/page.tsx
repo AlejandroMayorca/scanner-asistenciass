@@ -49,24 +49,109 @@ interface ConfirmForm {
 
 type ToastState = { color: 'red' | 'yellow' | 'green'; msg: string } | null
 
-// ─── PDF417 parser (cédula vieja) ─────────────────────────────────────────────
-
-const RS = '\x1e'
-
-function parseFechaPdf(raw: string): { fechaNacimiento: string; edad: number } | null {
-  const c = raw.replace(/\D/g, '')
-  if (c.length !== 8) return null
-  const y = c.slice(0, 4), mo = c.slice(4, 6), d = c.slice(6, 8)
-  if (parseInt(y) < 1900 || parseInt(y) > new Date().getFullYear()) return null
-  const fn = `${y}-${mo}-${d}`
-  return { fechaNacimiento: fn, edad: calcEdad(fn) }
-}
+// ─── PDF417 parsers (cédula vieja) ───────────────────────────────────────────
 
 function cleanName(s: string): string {
   return capitalize(s.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ\s]/g, '').trim())
 }
 
-function parsePdf417(raw: string): Cedula | null {
+function buildFecha(y: string, m: string, d: string): { fechaNacimiento: string; edad: number } | null {
+  if (!y || !m || !d) return null
+  const yy = parseInt(y)
+  if (yy < 1900 || yy > new Date().getFullYear()) return null
+  const fn = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+  return { fechaNacimiento: fn, edad: calcEdad(fn) }
+}
+
+// Parser 1 — posiciones fijas (payload completo ~530 bytes, formato binario DANE)
+function parsePdf417Binario(raw: string): Cedula | null {
+  if (raw.length < 160) return null
+  const clean = (s: string) => s.replace(/\x00/g, '').trim()
+
+  const cedula = clean(raw.substring(48, 58)).replace(/^0+/, '')
+  if (!/^\d{5,12}$/.test(cedula)) return null
+
+  const apellido1       = cleanName(clean(raw.substring(58, 80)))
+  const apellido2       = cleanName(clean(raw.substring(81, 104)))
+  const nombre1         = cleanName(clean(raw.substring(104, 127)))
+  const nombre2         = cleanName(clean(raw.substring(127, 150)))
+  const sexoChar        = clean(raw.substring(151, 152))
+  const anioNac         = clean(raw.substring(152, 156))
+  const mesNac          = clean(raw.substring(156, 158))
+  const diaNac          = clean(raw.substring(158, 160))
+  const rh              = clean(raw.substring(166, 168))
+
+  if (!apellido1 && !nombre1) return null
+
+  const nombres   = [nombre1, nombre2].filter(Boolean).join(' ')
+  const apellidos = [apellido1, apellido2].filter(Boolean).join(' ')
+  const sexo = sexoChar === 'M' || sexoChar === 'F' ? sexoChar as 'M' | 'F' : undefined
+
+  return {
+    cedula,
+    nombres,
+    apellidos,
+    sexo,
+    rh: rh || undefined,
+    modo: 'PDF417',
+    ...buildFecha(anioNac, mesNac, diaNac) ?? {},
+  }
+}
+
+// Parser 2 — null-byte split (igual que el script Python colombian_pdf417_decoder)
+// Estructura: sp[0]=AFIS, sp[1]=?, sp[2]=fingercard+docnum+apellido1,
+//             sp[3]=apellido2, sp[4]=nombre1, sp[5]=nombre2,
+//             sp[6]=sexo+año+mes+día+municipio+dpto+??+rh
+function parsePdf417NullSplit(raw: string): Cedula | null {
+  const normalized = raw.replace(/\x00{2,}/g, '\x00')
+  const segs = normalized.split('\x00')
+  if (segs.length < 6) return null
+
+  for (let i = 0; i <= segs.length - 5; i++) {
+    const seg = segs[i]
+    if (seg.length < 18) continue
+    // docnum en offsets 10-18 del segmento
+    const rawDoc = seg.substring(10, 18).replace(/\D/g, '').replace(/^0+/, '')
+    if (!/^\d{5,12}$/.test(rawDoc)) continue
+
+    const ap1 = cleanName(seg.substring(18).replace(/\x00/g, '').trim())
+    const ap2 = cleanName((segs[i + 1] ?? '').replace(/\x00/g, '').trim())
+    const nm1 = cleanName((segs[i + 2] ?? '').replace(/\x00/g, '').trim())
+    let   nm2 = cleanName((segs[i + 3] ?? '').replace(/\x00/g, '').trim())
+    const ds  = segs[i + 4] ?? ''
+
+    if (!ap1 && !nm1) continue
+
+    // nm2 = segundo nombre; si termina en '-' o '+' es artefacto → vacío
+    if (/[-+]$/.test(nm2)) nm2 = ''
+
+    const sexoChar = ds[1]
+    const rh       = ds.substring(16, 18).replace(/\x00/g, '').trim()
+    const sexo     = sexoChar === 'M' || sexoChar === 'F' ? sexoChar as 'M' | 'F' : undefined
+
+    return {
+      cedula:    rawDoc,
+      nombres:   [nm1, nm2].filter(Boolean).join(' '),
+      apellidos: [ap1, ap2].filter(Boolean).join(' '),
+      sexo,
+      rh: rh || undefined,
+      modo: 'PDF417',
+      ...buildFecha(ds.substring(2, 6), ds.substring(6, 8), ds.substring(8, 10)) ?? {},
+    }
+  }
+  return null
+}
+
+// Parser 3 — separadores legacy (\x1E, ; | , \n) para formatos más antiguos
+const RS = '\x1e'
+
+function parseFechaPdf(raw: string): { fechaNacimiento: string; edad: number } | null {
+  const c = raw.replace(/\D/g, '')
+  if (c.length !== 8) return null
+  return buildFecha(c.slice(0, 4), c.slice(4, 6), c.slice(6, 8))
+}
+
+function parsePdf417Legacy(raw: string): Cedula | null {
   if (!raw || raw.length < 10) return null
   if (raw.includes(RS)) {
     const f = raw.split(RS).map(s => s.trim())
@@ -171,12 +256,31 @@ function parseMrzRegex(text: string): Cedula | null {
   return { cedula, apellidos, nombres, modo: 'MRZ' }
 }
 
+// Debug helper: show key positions for diagnostic logging
+export function debugPdf417Positions(raw: string): string {
+  const vis = (s: string) => s.replace(/\x00/g, '□')
+  return [
+    `len=${raw.length}`,
+    `p48-58:"${vis(raw.substring(48, 58))}"`,
+    `p58-80:"${vis(raw.substring(58, 80))}"`,
+    `p104-127:"${vis(raw.substring(104, 127))}"`,
+    `p127-150:"${vis(raw.substring(127, 150))}"`,
+    `p151-160:"${vis(raw.substring(151, 160))}"`,
+    `p166-168:"${vis(raw.substring(166, 168))}"`,
+    `nulls=${(raw.match(/\x00/g) ?? []).length}`,
+    `segs=${raw.replace(/\x00{2,}/g, '\x00').split('\x00').length}`,
+  ].join(' | ')
+}
+
 function parseBarcode(raw: string): Cedula | null {
   if (!raw || raw.length < 5) return null
-  if (raw.includes(RS)) return parsePdf417(raw)
+  // MRZ first (cédula nueva)
   const up = raw.toUpperCase()
-  if (up.includes('ICCOL') || up.includes('IDCOL') || raw.includes('<<')) return parseMrzText(raw)
-  return parsePdf417(raw)
+  if (up.includes('ICCOL') || up.includes('IDCOL') || raw.includes('<<')) {
+    return parseMrzText(raw) ?? parseMrzRegex(raw)
+  }
+  // PDF417 binary (cédula vieja) — try all three strategies
+  return parsePdf417Binario(raw) ?? parsePdf417NullSplit(raw) ?? parsePdf417Legacy(raw)
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -319,9 +423,14 @@ export default function ScannerPage() {
 
         if (data.success && data.text) {
           rawServerText = data.text
-          addLog(`[txt] ${data.text}`)
-          detected = parseBarcode(data.text)
-          if (!detected) addLog('[parse] separadores estándar fallaron — abriendo raw')
+          addLog(`[txt] ${data.text.replace(/\x00/g, '□')}`)
+          addLog(`[pos] ${debugPdf417Positions(data.text)}`)
+          const r1 = parsePdf417Binario(data.text)
+          const r2 = r1 ? null : parsePdf417NullSplit(data.text)
+          const r3 = (r1 || r2) ? null : parsePdf417Legacy(data.text)
+          detected = r1 ?? r2 ?? r3 ?? parseMrzText(data.text) ?? parseMrzRegex(data.text)
+          addLog(`[parse] binario=${r1?'✓':'✗'} nullsplit=${r2?'✓':'✗'} legacy=${r3?'✓':'✗'} → ${detected ? `cedula=${detected.cedula}` : 'sin resultado'}`)
+          if (!detected) addLog('[parse] abriendo modal raw para completar manualmente')
         } else {
           addLog(`[api] sin detección: ${data.error ?? ''}`)
         }
