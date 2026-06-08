@@ -169,43 +169,71 @@ function cleanMrzName(s: string): string {
 }
 
 function correctMrzOcr(text: string): string {
-  return text.split('\n').map(line => {
+  // Fix Colombian country code OCR error: "C0L" (zero) → "COL" (letter O)
+  const fixed = text.replace(/C0L/g, 'COL')
+  return fixed.split('\n').map(line => {
     const t = line.trim()
-    if (t.length >= 20 && /[0-9<]{10,}/.test(t) && !/ {2,}/.test(t))
-      return t.replace(/O/g, '0').replace(/I/g, '1')
+    // Only apply O→0 / I→1 to lines that look like purely numeric MRZ data.
+    // Lines with 4+ consecutive letters are name lines — don't corrupt them.
+    if (
+      t.length >= 20 &&
+      /[0-9<]{8,}/.test(t) &&
+      !/ {2,}/.test(t) &&
+      !/[A-Z]{4,}/.test(t.replace(/COL/g, ''))
+    ) return t.replace(/O/g, '0').replace(/I/g, '1')
     return line
   }).join('\n')
 }
 
 function parseMrzLines(_l1: string, l2: string, l3: string): Cedula | null {
-  const l2c = l2.replace(/O/g, '0').replace(/I/g, '1')
-  const colIdx = l2c.indexOf('COL')
+  // Fix C0L → COL before anything else (Tesseract reads zero instead of letter O)
+  const l2up = l2.toUpperCase().replace(/C0L/g, 'COL')
+  const colIdx = l2up.indexOf('COL')
   if (colIdx < 0) return null
-  const cedula = l2c.slice(colIdx + 3).match(/^(\d{5,12})/)?.[1] ?? ''
+
+  // Apply O→0 / I→1 ONLY to the numeric sections, never to "COL" itself
+  const numBefore = l2up.slice(0, colIdx).replace(/O/g, '0').replace(/I/g, '1')
+  const numAfter  = l2up.slice(colIdx + 3).replace(/O/g, '0').replace(/I/g, '1')
+
+  // Birth date: first 6 chars of l2 (YYMMDD)
+  const yy = parseInt(numBefore.slice(0, 2))
+  const mm = parseInt(numBefore.slice(2, 4))
+  const dd = parseInt(numBefore.slice(4, 6))
+  // Sex: position 7 (after 6-digit date + 1 check digit)
+  const sc   = numBefore[7]
+  const sexo: 'M' | 'F' | undefined = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
+
+  // Cedula: leading digits right after COL
+  const cedula = numAfter.match(/^(\d{5,12})/)?.[1] ?? ''
   if (cedula.length < 5) return null
-  const yy = parseInt(l2c.slice(0, 2))
-  const mm = parseInt(l2c.slice(2, 4))
-  const dd = parseInt(l2c.slice(4, 6))
+
   let fechaNacimiento: string | undefined, edad: number | undefined
   if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
     const fullYear = yy > 30 ? 1900 + yy : 2000 + yy
     fechaNacimiento = `${fullYear}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
     edad = calcEdad(fechaNacimiento)
   }
-  const sc   = l2c[7]
-  const sexo: 'M' | 'F' | undefined = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
-  const nameRaw   = l3.replace(/<+$/, '')
-  const sepIdx    = nameRaw.indexOf('<<')
-  const apellidos = sepIdx >= 0 ? cleanMrzName(nameRaw.slice(0, sepIdx)) : cleanMrzName(nameRaw)
-  const nombres   = sepIdx >= 0 ? cleanMrzName(nameRaw.slice(sepIdx + 2)) : ''
+
+  // Names from l3: split on '<<', replace remaining '<' with spaces
+  const nameRaw   = l3.toUpperCase().replace(/<+$/, '')
+  const dblIdx    = nameRaw.indexOf('<<')
+  const apellidos = dblIdx >= 0 ? cleanMrzName(nameRaw.slice(0, dblIdx)) : cleanMrzName(nameRaw)
+  const nombres   = dblIdx >= 0 ? cleanMrzName(nameRaw.slice(dblIdx + 2)) : ''
   return { cedula, nombres, apellidos, sexo, fechaNacimiento, edad, modo: 'MRZ' }
 }
 
 function parseMrzText(raw: string): Cedula | null {
-  const corrected = correctMrzOcr(raw)
+  // Fix C0L → COL before anything, then standard OCR corrections
+  const corrected = correctMrzOcr(raw.replace(/C0L/g, 'COL'))
   const upper = corrected.toUpperCase()
-  const lines  = upper.split(/[\n\r]+/).map(l => l.trim().replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 10)
+
+  // Try newline split first; if that yields fewer lines than space split, use space split.
+  // Tesseract sometimes outputs all MRZ lines on one "line" separated by a space.
+  const byNL    = upper.split(/[\n\r]+/).map(l => l.trim().replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 10)
+  const bySpace = upper.split(/[\n\r ]+/).map(l => l.trim().replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 10)
+  const lines   = bySpace.length > byNL.length ? bySpace : byNL
   if (lines.length === 0) return null
+
   for (const pfx of ['ICCOL', 'IDCOL', 'IC<COL', 'ID<COL']) {
     const i = lines.findIndex(l => l.startsWith(pfx))
     if (i >= 0 && i + 2 < lines.length) {
@@ -213,34 +241,71 @@ function parseMrzText(raw: string): Cedula | null {
       if (r) return r
     }
   }
+
+  // Numeric data line: YYMMDD + check digit + sex (M/F/0) — allow it to be the first line (>= 0)
   const l2i = lines.findIndex(l => /^\d{7}[MF0]/.test(l))
-  if (l2i > 0 && l2i + 1 < lines.length) {
-    const r = parseMrzLines(lines[l2i - 1], lines[l2i].padEnd(30, '<'), lines[l2i + 1])
+  if (l2i >= 0 && l2i + 1 < lines.length) {
+    const r = parseMrzLines(l2i > 0 ? lines[l2i - 1] : '', lines[l2i].padEnd(30, '<'), lines[l2i + 1])
     if (r) return r
   }
+
+  // Name line (contains '<<') — needs at least one preceding line for the data line
   const l3i = lines.findIndex(l => l.includes('<<'))
-  if (l3i >= 2) {
-    const r = parseMrzLines(lines[l3i - 2], lines[l3i - 1].padEnd(30, '<'), lines[l3i])
+  if (l3i >= 1) {
+    const r = parseMrzLines(l3i >= 2 ? lines[l3i - 2] : '', lines[l3i - 1].padEnd(30, '<'), lines[l3i])
     if (r) return r
   }
   return null
 }
 
 function parseMrzRegex(text: string): Cedula | null {
-  const corrected = correctMrzOcr(text)
-  const up = corrected.toUpperCase().replace(/[^A-Z0-9<\n\r]/g, ' ')
-  let cedula = ''
-  const m1 = up.match(/COL(\d{6,12})[<0-9 \n\r]/)
-  if (m1) cedula = m1[1]
-  if (!cedula) {
-    const m2 = up.match(/ICCOL(\d{6,12})/)
-    if (m2) cedula = m2[1]
+  // Fix C0L → COL before everything
+  const fixed = text.replace(/C0L/g, 'COL')
+  const up = fixed.toUpperCase().replace(/[^A-Z0-9<\n\r ]/g, ' ')
+
+  // Cedula: digits after COL (regex /COL(\d{5,12})/)
+  const m1 = up.match(/COL(\d{5,12})/)
+  if (!m1) return null
+  const cedula = m1[1]
+
+  // Split by newline or space to find individual segments
+  const lines = up.split(/[\n\r ]+/).filter(l => l.length >= 10)
+
+  // Birth date (first 6 chars) and sex (pos 7) from the line that contains COL
+  let fechaNacimiento: string | undefined, edad: number | undefined
+  let sexo: 'M' | 'F' | undefined
+  for (const line of lines) {
+    if (!line.includes('COL')) continue
+    const num = line.slice(0, 8).replace(/O/g, '0').replace(/I/g, '1')
+    const yy = parseInt(num.slice(0, 2))
+    const mm = parseInt(num.slice(2, 4))
+    const dd = parseInt(num.slice(4, 6))
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      const fy = yy > 30 ? 1900 + yy : 2000 + yy
+      fechaNacimiento = `${fy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+      edad = calcEdad(fechaNacimiento)
+    }
+    const sc = num[7]
+    sexo = sc === 'M' ? 'M' : sc === 'F' ? 'F' : undefined
+    break
   }
-  if (cedula.length < 5) return null
+
+  // Names from the line with '<<': split by '<<', clean '<' → space
   let apellidos = '', nombres = ''
-  const m3 = up.match(/([A-Z][A-Z< ]+)<<([A-Z][A-Z< ]*)/)
-  if (m3) { apellidos = cleanMrzName(m3[1]); nombres = cleanMrzName(m3[2]) }
-  return { cedula, apellidos, nombres, modo: 'MRZ' }
+  for (const line of lines) {
+    const di = line.indexOf('<<')
+    if (di < 0) continue
+    apellidos = cleanMrzName(line.slice(0, di))
+    nombres   = cleanMrzName(line.slice(di + 2))
+    break
+  }
+  // Fallback: regex match anywhere in combined text
+  if (!apellidos) {
+    const m3 = up.match(/([A-Z]{2}[A-Z<]+)<<([A-Z<]*)/)
+    if (m3) { apellidos = cleanMrzName(m3[1]); nombres = cleanMrzName(m3[2]) }
+  }
+
+  return { cedula, apellidos, nombres, sexo, fechaNacimiento, edad, modo: 'MRZ' }
 }
 
 export function debugPdf417Positions(raw: string): string {
