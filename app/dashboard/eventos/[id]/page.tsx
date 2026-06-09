@@ -26,7 +26,7 @@ function calcEdad(fechaNacimiento: string): number {
 }
 
 const FIELD =
-  'w-full bg-[#0a0a0a] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
+  'w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500 transition'
 
 const PAGE_SIZE = 25
 
@@ -133,13 +133,13 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
   return (
     <div className="max-w-xl">
       {/* Operator link */}
-      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-4 mb-4">
+      <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-4 mb-4">
         <p className="text-xs text-zinc-400 mb-2.5 font-medium flex items-center gap-1.5">
           <Link2 size={12} /> Link de operador
         </p>
         {token ? (
           <div className="flex gap-2">
-            <code className="flex-1 text-xs bg-[#0a0a0a] rounded-xl px-3 py-2.5 text-blue-400 truncate font-mono border border-[#27272a]">
+            <code className="flex-1 text-xs bg-[#0a0a0a] rounded-xl px-3 py-2.5 text-blue-400 truncate font-mono border border-[#2a2a2e]">
               {`${typeof window !== 'undefined' ? window.location.origin : ''}/evento/${token}/scanner`}
             </code>
             <button
@@ -147,7 +147,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
               className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition active:scale-95 ${
                 copied
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                  : 'bg-white/5 text-zinc-400 hover:text-white border border-[#27272a]'
+                  : 'bg-white/5 text-zinc-400 hover:text-white border border-[#2a2a2e]'
               }`}
             >
               {copied ? <><Check size={13} /> Copiado</> : <><Copy size={13} /> Copiar</>}
@@ -157,7 +157,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
           <button
             onClick={handleGenerarToken}
             disabled={generatingToken}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-[#27272a] text-zinc-400 hover:text-white text-xs font-semibold transition active:scale-95 disabled:opacity-60"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-[#2a2a2e] text-zinc-400 hover:text-white text-xs font-semibold transition active:scale-95 disabled:opacity-60"
           >
             {generatingToken ? <><Spinner size="sm" /> Generando…</> : <><Link2 size={13} /> Generar link de operador</>}
           </button>
@@ -193,7 +193,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-xs text-zinc-400 mb-1.5">Número de cédula *</label>
+          <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Número de cédula *</label>
           <input
             required
             value={form.cedula}
@@ -206,7 +206,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Nombres *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Nombres *</label>
             <input
               required
               value={form.nombres}
@@ -216,7 +216,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Apellidos *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Apellidos *</label>
             <input
               required
               value={form.apellidos}
@@ -229,7 +229,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Fecha de nacimiento *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Fecha de nacimiento *</label>
             <input
               required
               type="date"
@@ -239,7 +239,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Sexo *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Sexo *</label>
             <select
               required
               value={form.sexo}
@@ -261,7 +261,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
         )}
 
         <div>
-          <label className="block text-xs text-zinc-400 mb-1.5">
+          <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">
             RH <span className="text-zinc-600">(opcional)</span>
           </label>
           <input
@@ -395,7 +395,7 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1) }}
             placeholder="Buscar por cédula, nombre o apellido…"
-            className="w-full bg-[#111113] border border-[#27272a] rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
+            className="w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500 transition"
           />
         </div>
         <button
@@ -413,7 +413,7 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
         {search && ` para "${search}"`}
       </p>
 
-      <div className="bg-[#111113] border border-[#27272a] rounded-2xl overflow-hidden">
+      <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -514,12 +514,12 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
       {confirmDel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
-          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
+          <div className="relative bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 max-w-xs w-full">
             <p className="font-semibold text-white mb-2">¿Eliminar este registro?</p>
             <p className="text-zinc-400 text-sm mb-5">Esta acción no se puede deshacer.</p>
             <div className="flex gap-3">
               <button onClick={() => setConfirmDel(null)}
-                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
                 No
               </button>
               <button onClick={handleDelete} disabled={deleting}
@@ -535,7 +535,7 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
       {editingAsis && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/70" onClick={() => setEditingAsis(null)} />
-          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-sm w-full max-h-[90dvh] overflow-y-auto">
+          <div className="relative bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 max-w-sm w-full max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <p className="font-semibold text-white">Editar asistente</p>
               <button onClick={() => setEditingAsis(null)} className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition">
@@ -544,26 +544,26 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
             </div>
             <form onSubmit={handleEditSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">Cédula</label>
+                <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Cédula</label>
                 <input value={editForm.cedula} onChange={e => setEditForm(f => ({ ...f, cedula: e.target.value }))} className={FIELD} inputMode="numeric" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">Nombres</label>
+                  <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Nombres</label>
                   <input value={editForm.nombres} onChange={e => setEditForm(f => ({ ...f, nombres: e.target.value }))} className={FIELD} />
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">Apellidos</label>
+                  <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Apellidos</label>
                   <input value={editForm.apellidos} onChange={e => setEditForm(f => ({ ...f, apellidos: e.target.value }))} className={FIELD} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">Nacimiento</label>
+                  <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Nacimiento</label>
                   <input type="date" value={editForm.fechaNacimiento} onChange={e => setEditForm(f => ({ ...f, fechaNacimiento: e.target.value }))} className={`${FIELD} [color-scheme:dark]`} />
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1.5">Sexo</label>
+                  <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Sexo</label>
                   <select value={editForm.sexo} onChange={e => setEditForm(f => ({ ...f, sexo: e.target.value as 'M' | 'F' | '' }))} className={`${FIELD} [color-scheme:dark]`}>
                     <option value="">—</option>
                     <option value="M">Masculino</option>
@@ -572,12 +572,12 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">RH</label>
+                <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">RH</label>
                 <input value={editForm.rh} onChange={e => setEditForm(f => ({ ...f, rh: e.target.value }))} placeholder="O+" className={FIELD} />
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setEditingAsis(null)}
-                  className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                  className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
                   Cancelar
                 </button>
                 <button type="submit" disabled={editSaving}
@@ -640,7 +640,7 @@ function EstadisticasTab({ eventoId }: { eventoId: string }) {
 
       {/* Gender bar */}
       {(stats.hombres > 0 || stats.mujeres > 0) && (
-        <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-5">
+        <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-5">
           <h3 className="text-sm font-semibold text-white mb-3">Distribución por género</h3>
           <div className="flex h-4 rounded-full overflow-hidden bg-[#27272a]">
             <div className="bg-sky-500 transition-all" style={{ width: `${pctH}%` }} />
@@ -655,7 +655,7 @@ function EstadisticasTab({ eventoId }: { eventoId: string }) {
 
       <div className="grid lg:grid-cols-2 gap-5">
         {/* Age */}
-        <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-5">
+        <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-5">
           <h3 className="text-sm font-semibold text-white mb-4">Distribución de edades</h3>
           <div className="space-y-3">
             {AGE_CFG.map(({ key, label, color }) => {
@@ -677,7 +677,7 @@ function EstadisticasTab({ eventoId }: { eventoId: string }) {
         </div>
 
         {/* Hourly */}
-        <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-5">
+        <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-5">
           <h3 className="text-sm font-semibold text-white mb-1">Ingresos por hora</h3>
           {stats.total > 0 && (
             <p className="text-xs text-zinc-500 mb-4">
@@ -769,7 +769,7 @@ export default function EventoDetailPage() {
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b border-[#27272a]">
+        <div className="flex overflow-x-auto border-b border-[#2a2a2e] scrollbar-none">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${

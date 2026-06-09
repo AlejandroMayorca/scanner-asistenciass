@@ -97,7 +97,7 @@ export default function LoginPage() {
                 onChange={e => setEmail(e.target.value)}
                 placeholder="correo@ejemplo.com"
                 autoComplete="email"
-                className="w-full bg-[#18181b] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
+                className="w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"
               />
             </div>
 
@@ -111,7 +111,7 @@ export default function LoginPage() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  className="w-full bg-[#18181b] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition pr-10"
+                  className="w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition pr-10"
                 />
                 <button
                   type="button"

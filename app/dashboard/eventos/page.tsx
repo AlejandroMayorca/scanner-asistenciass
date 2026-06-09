@@ -27,7 +27,7 @@ function toDate(v: unknown): Date {
 }
 
 const FIELD =
-  'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
+  'w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500 transition'
 
 export default function EventosPage() {
   const { profile, user } = useAuth()
@@ -171,7 +171,7 @@ export default function EventosPage() {
           {filtered.map(ev => (
             <div
               key={ev.id}
-              className="bg-[#111113] border border-[#27272a] rounded-2xl p-5 flex flex-col hover:border-zinc-600 transition"
+              className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-5 flex flex-col hover:border-zinc-600 transition"
             >
               {/* Header */}
               <div className="flex items-start justify-between gap-2 mb-2">
@@ -231,7 +231,7 @@ export default function EventosPage() {
                   </Link>
                   <Link
                     href={`/dashboard/eventos/${ev.id}`}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-white/8 hover:bg-white/12 text-zinc-300 text-xs font-semibold border border-[#27272a] hover:border-zinc-500 transition active:scale-95"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-white/8 hover:bg-white/12 text-zinc-300 text-xs font-semibold border border-[#2a2a2e] hover:border-zinc-500 transition active:scale-95"
                   >
                     📊 Ver registros
                   </Link>
@@ -246,7 +246,7 @@ export default function EventosPage() {
       <Modal open={showCreate} onClose={() => { setShowCreate(false); setSaveError(null) }} title="Nuevo evento">
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Nombre *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Nombre *</label>
             <input
               required
               value={form.nombre}
@@ -256,7 +256,7 @@ export default function EventosPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Fecha *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Fecha *</label>
             <input
               required
               type="date"
@@ -266,7 +266,7 @@ export default function EventosPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Lugar *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Lugar *</label>
             <input
               required
               value={form.lugar}
@@ -276,7 +276,7 @@ export default function EventosPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">
               Descripción <span className="text-zinc-600">(opcional)</span>
             </label>
             <textarea
@@ -299,7 +299,7 @@ export default function EventosPage() {
             <button
               type="button"
               onClick={() => { setShowCreate(false); setSaveError(null) }}
-              className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+              className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition"
             >
               Cancelar
             </button>
@@ -318,7 +318,7 @@ export default function EventosPage() {
       {confirmDel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
-          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
+          <div className="relative bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 max-w-xs w-full">
             <p className="font-semibold text-white mb-2">¿Eliminar evento?</p>
             <p className="text-zinc-400 text-sm mb-5">
               Se eliminarán el evento y <strong className="text-white">todas</strong> sus
@@ -327,7 +327,7 @@ export default function EventosPage() {
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirmDel(null)}
-                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition"
+                className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition"
               >
                 Cancelar
               </button>

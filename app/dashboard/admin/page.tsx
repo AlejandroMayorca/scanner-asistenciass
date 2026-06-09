@@ -40,7 +40,7 @@ function getSecondaryAuth() {
 }
 
 const FIELD =
-  'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
+  'w-full bg-[#1a1a1d] border border-[#2a2a2e] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500 transition'
 
 type AdminTab = 'usuarios' | 'operadores' | 'eventos' | 'backup' | 'logs'
 
@@ -83,7 +83,7 @@ export default function AdminPage() {
           <p className="text-zinc-500 text-sm mt-0.5">Gestión de usuarios, eventos y backups</p>
         </div>
 
-        <div className="flex border-b border-[#27272a]">
+        <div className="flex border-b border-[#2a2a2e]">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-5 py-3 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
@@ -170,7 +170,7 @@ function UsuariosTab() {
       ) : (
         <div className="space-y-2">
           {usuarios.map(u => (
-            <div key={u.id} className="bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3.5 flex items-center gap-4">
+            <div key={u.id} className="bg-[#111113] border border-[#2a2a2e] rounded-xl px-4 py-3.5 flex items-center gap-4">
               <div className="w-9 h-9 rounded-full bg-[#27272a] flex items-center justify-center shrink-0">
                 <Users size={16} className="text-zinc-400" />
               </div>
@@ -203,19 +203,19 @@ function UsuariosTab() {
       <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError('') }} title="Nuevo usuario">
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Email *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Email *</label>
             <input required type="email" value={form.email}
               onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
               placeholder="usuario@ejemplo.com" className={FIELD} />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Contraseña *</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Contraseña *</label>
             <input required type="password" value={form.password}
               onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
               placeholder="Mínimo 6 caracteres" className={FIELD} />
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Rol</label>
+            <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Rol</label>
             <select value={form.rol}
               onChange={e => setForm(f => ({ ...f, rol: e.target.value as 'admin' | 'ayudante' }))}
               className={`${FIELD} [color-scheme:dark]`}>
@@ -230,7 +230,7 @@ function UsuariosTab() {
           )}
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => { setShowCreate(false); setFormError('') }}
-              className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+              className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
               Cancelar
             </button>
             <button type="submit" disabled={saving}
@@ -345,7 +345,7 @@ function OperadoresTab() {
             <p className="text-center py-12 text-zinc-600">No hay operadores. Crea el primero.</p>
           )}
           {operadores.map(op => (
-            <div key={op.uid} className="bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3.5 flex items-center gap-3">
+            <div key={op.uid} className="bg-[#111113] border border-[#2a2a2e] rounded-xl px-4 py-3.5 flex items-center gap-3">
               <div className="w-9 h-9 rounded-full bg-[#27272a] flex items-center justify-center shrink-0">
                 <Users size={16} className="text-zinc-400" />
               </div>
@@ -407,7 +407,7 @@ function OperadoresTab() {
               </div>
             </div>
             <button onClick={() => copyCredText(showCreds.email, showCreds.password)}
-              className="flex items-center gap-2 w-full justify-center px-4 py-2.5 rounded-xl border border-[#27272a] text-sm text-zinc-400 hover:text-white hover:bg-white/5 transition">
+              className="flex items-center gap-2 w-full justify-center px-4 py-2.5 rounded-xl border border-[#2a2a2e] text-sm text-zinc-400 hover:text-white hover:bg-white/5 transition">
               {copiedCred ? <><CheckCircle size={14} className="text-emerald-400" /> Copiado</> : <><Copy size={14} /> Copiar credenciales</>}
             </button>
             <button onClick={() => { setShowCreds(null); setShowCreate(false) }}
@@ -419,26 +419,26 @@ function OperadoresTab() {
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">Nombre *</label>
+                <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Nombre *</label>
                 <input required value={form.nombre}
                   onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
                   placeholder="Juan" className={FIELD} />
               </div>
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5">Apellido *</label>
+                <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Apellido *</label>
                 <input required value={form.apellido}
                   onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
                   placeholder="García" className={FIELD} />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-zinc-400 mb-1.5">Email *</label>
+              <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Email *</label>
               <input required type="email" value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                 placeholder="operador@ejemplo.com" className={FIELD} />
             </div>
             <div>
-              <label className="block text-xs text-zinc-400 mb-1.5">Contraseña *</label>
+              <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wide mb-1.5">Contraseña *</label>
               <input required type="password" value={form.password}
                 onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
                 placeholder="Mínimo 6 caracteres" className={FIELD} />
@@ -450,7 +450,7 @@ function OperadoresTab() {
             )}
             <div className="flex gap-3 pt-1">
               <button type="button" onClick={() => { setShowCreate(false); setCreateError('') }}
-                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
                 Cancelar
               </button>
               <button type="submit" disabled={creating}
@@ -466,7 +466,7 @@ function OperadoresTab() {
       {confirmDel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
-          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
+          <div className="relative bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 max-w-xs w-full">
             <p className="font-semibold text-white mb-2">¿Eliminar operador?</p>
             <p className="text-zinc-400 text-sm mb-1">
               <strong className="text-white">{confirmDel.nombre} {confirmDel.apellido}</strong> será desactivado.
@@ -474,7 +474,7 @@ function OperadoresTab() {
             <p className="text-zinc-500 text-xs mb-5">Sus registros se conservan. Puedes reactivarlo después.</p>
             <div className="flex gap-3">
               <button onClick={() => setConfirmDel(null)}
-                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
                 Cancelar
               </button>
               <button onClick={handleDeactivate}
@@ -526,7 +526,7 @@ function OperadorRegistrosPanel({ operador, onClose }: { operador: OperadorPerfi
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#09090b]">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 lg:px-8 py-4 border-b border-[#27272a] shrink-0">
+      <div className="flex items-center gap-3 px-4 lg:px-8 py-4 border-b border-[#2a2a2e] shrink-0">
         <button onClick={onClose}
           className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition">
           <X size={18} />
@@ -540,7 +540,7 @@ function OperadorRegistrosPanel({ operador, onClose }: { operador: OperadorPerfi
         </div>
         {eventoOptions.length > 1 && (
           <select value={filterEvento} onChange={e => setFilterEvento(e.target.value)}
-            className="bg-[#111113] border border-[#27272a] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 [color-scheme:dark]">
+            className="bg-[#111113] border border-[#2a2a2e] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 [color-scheme:dark]">
             <option value="">Todos los eventos</option>
             {eventoOptions.map(id => (
               <option key={id} value={id}>{eventoNames[id] || id}</option>
@@ -568,11 +568,11 @@ function OperadorRegistrosPanel({ operador, onClose }: { operador: OperadorPerfi
             <p>Este operador no tiene registros aún.</p>
           </div>
         ) : (
-          <div className="bg-[#111113] border border-[#27272a] rounded-2xl overflow-hidden">
+          <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[#27272a] text-zinc-500 text-xs">
+                  <tr className="border-b border-[#2a2a2e] text-zinc-500 text-xs">
                     <th className="text-left px-4 py-3 font-medium">Evento</th>
                     <th className="text-left px-4 py-3 font-medium">Asistente</th>
                     <th className="text-left px-4 py-3 font-medium">Cédula</th>
@@ -671,7 +671,7 @@ function EventosAdminTab() {
       )}
       <div className="space-y-2">
         {eventos.map(ev => (
-          <div key={ev.id} className="bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3.5 flex items-center gap-4">
+          <div key={ev.id} className="bg-[#111113] border border-[#2a2a2e] rounded-xl px-4 py-3.5 flex items-center gap-4">
             <div className="flex-1 min-w-0">
               <p className="text-white text-sm font-medium truncate">{ev.nombre}</p>
               <p className="text-zinc-500 text-xs mt-0.5">
@@ -694,12 +694,12 @@ function EventosAdminTab() {
       {confirmDel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/70" onClick={() => setConfirmDel(null)} />
-          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-xs w-full">
+          <div className="relative bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 max-w-xs w-full">
             <p className="font-semibold text-white mb-2">¿Eliminar evento?</p>
             <p className="text-zinc-400 text-sm mb-5">Se eliminarán el evento y <strong className="text-white">todas</strong> sus asistencias. No se puede deshacer.</p>
             <div className="flex gap-3">
               <button onClick={() => setConfirmDel(null)}
-                className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                className="flex-1 py-2.5 rounded-xl border border-[#2a2a2e] text-zinc-400 text-sm hover:bg-white/5 transition">
                 Cancelar
               </button>
               <button onClick={() => handleDelete(confirmDel)} disabled={deleting}
@@ -761,7 +761,7 @@ function BackupTab() {
   return (
     <div className="max-w-md space-y-4">
       {/* Download */}
-      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-6 space-y-4">
+      <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 space-y-4">
         <div>
           <h3 className="font-semibold text-white mb-1">Backup completo JSON</h3>
           <p className="text-zinc-400 text-sm">
@@ -779,7 +779,7 @@ function BackupTab() {
       </div>
 
       {/* Restore */}
-      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-6 space-y-4">
+      <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-6 space-y-4">
         <div>
           <h3 className="font-semibold text-white mb-1">Restaurar desde backup</h3>
           <p className="text-zinc-400 text-sm">
@@ -803,7 +803,7 @@ function BackupTab() {
         </button>
 
         {progress.length > 0 && (
-          <div className="bg-[#0a0a0a] border border-[#27272a] rounded-xl p-3 max-h-36 overflow-y-auto space-y-0.5">
+          <div className="bg-[#0a0a0a] border border-[#2a2a2e] rounded-xl p-3 max-h-36 overflow-y-auto space-y-0.5">
             {progress.map((msg, i) => (
               <p key={i} className="text-xs text-zinc-400 font-mono">{msg}</p>
             ))}
@@ -910,7 +910,7 @@ function LogsTab() {
   return (
     <div>
       {/* Filters */}
-      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-4 mb-4 space-y-3">
+      <div className="bg-[#111113] border border-[#2a2a2e] rounded-2xl p-4 mb-4 space-y-3">
         <div className="flex items-center gap-2 mb-1">
           <Filter size={13} className="text-zinc-500" />
           <span className="text-xs text-zinc-500 font-medium">Filtros</span>
@@ -963,67 +963,97 @@ function LogsTab() {
         </button>
       </div>
 
-      {/* Table */}
+      {/* Table / Cards */}
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-zinc-600">
           <Activity size={36} className="mx-auto mb-2 opacity-30" />
           <p>{hasFilters ? 'No hay logs con esos filtros.' : 'No hay logs aún.'}</p>
         </div>
       ) : (
-        <div className="bg-[#111113] border border-[#27272a] rounded-2xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#27272a] text-zinc-500 text-xs">
-                  <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Fecha/Hora</th>
-                  <th className="text-left px-4 py-3 font-medium">Tipo</th>
-                  <th className="text-left px-4 py-3 font-medium">Operador</th>
-                  <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Evento</th>
-                  <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Asistente</th>
-                  <th className="text-left px-4 py-3 font-medium hidden xl:table-cell">Detalles</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginated.map(l => {
-                  const badge = TIPO_BADGE[l.tipo] ?? { label: l.tipo, cls: 'bg-zinc-700 text-zinc-400' }
-                  return (
-                    <tr key={l.id} className="border-b border-[#1a1a1d] last:border-0 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 text-zinc-400 text-xs whitespace-nowrap font-mono">
-                        {format(toDate(l.fecha), 'dd/MM/yyyy HH:mm:ss')}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
-                          {badge.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-white text-xs font-medium leading-tight truncate max-w-[140px]">{l.operadorNombre || '—'}</p>
-                        {l.operadorEmail && <p className="text-zinc-500 text-[10px] truncate max-w-[140px]">{l.operadorEmail}</p>}
-                      </td>
-                      <td className="px-4 py-3 hidden md:table-cell text-zinc-400 text-xs truncate max-w-[140px]">
-                        {l.eventoNombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 hidden lg:table-cell">
-                        {l.nombreAsistente ? (
-                          <>
-                            <p className="text-white text-xs leading-tight">{l.nombreAsistente}</p>
-                            {l.cedula && <p className="text-blue-400 font-mono text-[10px]">{l.cedula}</p>}
-                          </>
-                        ) : <span className="text-zinc-600">—</span>}
-                      </td>
-                      <td className="px-4 py-3 hidden xl:table-cell text-zinc-500 text-xs max-w-[200px] truncate" title={l.detalles}>
-                        {l.detalles || '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+        <>
+          {/* Mobile cards */}
+          <div className="sm:hidden space-y-2 mb-3">
+            {paginated.map(l => {
+              const badge = TIPO_BADGE[l.tipo] ?? { label: l.tipo, cls: 'bg-zinc-700 text-zinc-400' }
+              return (
+                <div key={l.id} className="bg-[#111113] border border-[#2a2a2e] rounded-xl p-4 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>{badge.label}</span>
+                    <span className="text-zinc-500 text-[10px] font-mono">{format(toDate(l.fecha), 'dd/MM/yy HH:mm')}</span>
+                  </div>
+                  <p className="text-white text-xs font-medium leading-tight">{l.operadorNombre || '—'}</p>
+                  {l.eventoNombre && <p className="text-zinc-400 text-[11px]">📅 {l.eventoNombre}</p>}
+                  {l.nombreAsistente && (
+                    <p className="text-[11px]">
+                      <span className="text-zinc-200">{l.nombreAsistente}</span>
+                      {l.cedula && <span className="text-blue-400 font-mono ml-2">{l.cedula}</span>}
+                    </p>
+                  )}
+                  {l.detalles && l.detalles !== 'Sin cambios' && (
+                    <p className="text-zinc-500 text-[10px] line-clamp-2">{l.detalles}</p>
+                  )}
+                </div>
+              )
+            })}
           </div>
 
+          {/* Desktop table */}
+          <div className="hidden sm:block bg-[#111113] border border-[#2a2a2e] rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[#2a2a2e] text-zinc-500 text-xs">
+                    <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Fecha/Hora</th>
+                    <th className="text-left px-4 py-3 font-medium">Tipo</th>
+                    <th className="text-left px-4 py-3 font-medium">Operador</th>
+                    <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Evento</th>
+                    <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Asistente</th>
+                    <th className="text-left px-4 py-3 font-medium hidden xl:table-cell">Detalles</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginated.map(l => {
+                    const badge = TIPO_BADGE[l.tipo] ?? { label: l.tipo, cls: 'bg-zinc-700 text-zinc-400' }
+                    return (
+                      <tr key={l.id} className="border-b border-[#1a1a1d] last:border-0 hover:bg-white/[0.02]">
+                        <td className="px-4 py-3 text-zinc-400 text-xs whitespace-nowrap font-mono">
+                          {format(toDate(l.fecha), 'dd/MM/yyyy HH:mm:ss')}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
+                            {badge.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-white text-xs font-medium leading-tight truncate max-w-[140px]">{l.operadorNombre || '—'}</p>
+                          {l.operadorEmail && <p className="text-zinc-500 text-[10px] truncate max-w-[140px]">{l.operadorEmail}</p>}
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell text-zinc-400 text-xs truncate max-w-[140px]">
+                          {l.eventoNombre || '—'}
+                        </td>
+                        <td className="px-4 py-3 hidden lg:table-cell">
+                          {l.nombreAsistente ? (
+                            <>
+                              <p className="text-white text-xs leading-tight">{l.nombreAsistente}</p>
+                              {l.cedula && <p className="text-blue-400 font-mono text-[10px]">{l.cedula}</p>}
+                            </>
+                          ) : <span className="text-zinc-600">—</span>}
+                        </td>
+                        <td className="px-4 py-3 hidden xl:table-cell text-zinc-500 text-xs max-w-[200px] truncate" title={l.detalles}>
+                          {l.detalles || '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Shared pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-[#27272a] text-xs text-zinc-500">
-              <span>Página {page} de {totalPages} · mostrando {paginated.length} de {filtered.length}</span>
+            <div className="flex items-center justify-between py-3 text-xs text-zinc-500 mt-2">
+              <span>Pág {page}/{totalPages} · {paginated.length} de {filtered.length}</span>
               <div className="flex gap-2">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
                   className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-40 transition">
@@ -1036,7 +1066,7 @@ function LogsTab() {
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   )

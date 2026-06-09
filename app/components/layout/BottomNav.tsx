@@ -17,7 +17,7 @@ export function BottomNav() {
   ]
 
   return (
-    <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#111113] border-t border-[#27272a] flex">
+    <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#111113] border-t border-[#2a2a2e] flex">
       {items.map(({ href, label, icon: Icon }) => {
         const active = pathname.startsWith(href)
         return (

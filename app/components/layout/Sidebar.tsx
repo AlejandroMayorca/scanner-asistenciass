@@ -23,8 +23,8 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="hidden lg:flex flex-col w-60 shrink-0 bg-[#111113] border-r border-[#27272a] h-screen sticky top-0">
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-[#27272a]">
+    <aside className="hidden lg:flex flex-col w-60 shrink-0 bg-[#111113] border-r border-[#2a2a2e] h-screen sticky top-0">
+      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-[#2a2a2e]">
         <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
           <ScanLine size={16} className="text-white" />
         </div>
@@ -51,7 +51,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="px-3 py-4 border-t border-[#27272a] space-y-1">
+      <div className="px-3 py-4 border-t border-[#2a2a2e] space-y-1">
         <div className="px-3 py-2.5 rounded-lg bg-white/5">
           <div className="flex items-center gap-2 mb-0.5">
             <Shield
