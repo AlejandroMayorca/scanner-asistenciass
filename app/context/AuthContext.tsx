@@ -6,7 +6,7 @@ import type { User } from 'firebase/auth'
 import { auth } from '../lib/firebase'
 import {
   getUsuarioPerfil, setUsuarioPerfil,
-  getOperadorPerfil, updateOperador,
+  getOperadorPerfil, updateOperador, registrarLog,
 } from '../lib/firestore'
 import type { UserProfile, OperadorPerfil } from '../lib/types'
 
@@ -85,6 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setOpPerfil(op)
       const synthetic: UserProfile = { id: uid, email: op.email, rol: 'ayudante', activo: true, creadoEn: op.creadoEn }
       setProfile(synthetic)
+      const opNombre = `${op.nombre} ${op.apellido}`.trim()
+      registrarLog({ tipo: 'LOGIN', eventoId: null, eventoNombre: null, asistenciaId: null, cedula: '', nombreAsistente: '', operadorUid: uid, operadorNombre: opNombre, operadorEmail: op.email, detalles: 'Inicio de sesión', ip: '' })
       return synthetic
     }
 
@@ -100,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (email === ADMIN_EMAIL) {
         const fallback: UserProfile = { id: uid, email: ADMIN_EMAIL, rol: 'admin', activo: true, creadoEn: new Date() }
         setProfile(fallback)
+        registrarLog({ tipo: 'LOGIN', eventoId: null, eventoNombre: null, asistenciaId: null, cedula: '', nombreAsistente: '', operadorUid: uid, operadorNombre: ADMIN_EMAIL, operadorEmail: ADMIN_EMAIL, detalles: 'Inicio de sesión', ip: '' })
         return fallback
       }
       throw new Error('Usuario no registrado en el sistema. Contacta al administrador.')
@@ -107,10 +110,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!p.activo) throw new Error('Tu cuenta está desactivada. Contacta al administrador.')
     setProfile(p)
+    registrarLog({ tipo: 'LOGIN', eventoId: null, eventoNombre: null, asistenciaId: null, cedula: '', nombreAsistente: '', operadorUid: uid, operadorNombre: p.email, operadorEmail: p.email, detalles: 'Inicio de sesión', ip: '' })
     return p
   }
 
   const signOut = async () => {
+    if (user) {
+      const nombre = opPerfil
+        ? `${opPerfil.nombre} ${opPerfil.apellido}`.trim()
+        : (profile?.email ?? user.email ?? '')
+      registrarLog({ tipo: 'LOGOUT', eventoId: null, eventoNombre: null, asistenciaId: null, cedula: '', nombreAsistente: '', operadorUid: user.uid, operadorNombre: nombre, operadorEmail: user.email ?? '', detalles: 'Cierre de sesión', ip: '' })
+    }
     await fbSignOut(auth)
     setProfile(null)
     setOpPerfil(null)

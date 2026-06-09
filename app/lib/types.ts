@@ -47,3 +47,19 @@ export interface OperadorPerfil {
   creadoPor: string
   ultimoAcceso: Timestamp | Date | null
 }
+
+export interface Log {
+  id?: string
+  tipo: 'REGISTRO' | 'EDICION' | 'ELIMINACION' | 'LOGIN' | 'LOGOUT'
+  eventoId: string | null
+  eventoNombre: string | null
+  asistenciaId: string | null
+  cedula: string
+  nombreAsistente: string
+  operadorUid: string
+  operadorNombre: string
+  operadorEmail: string
+  fecha: Timestamp | Date
+  detalles: string
+  ip: string
+}

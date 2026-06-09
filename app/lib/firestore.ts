@@ -3,7 +3,7 @@ import {
   query, where, orderBy, limit, Timestamp, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
-import type { Evento, Asistencia, UserProfile, OperadorPerfil } from './types'
+import type { Evento, Asistencia, UserProfile, OperadorPerfil, Log } from './types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -101,8 +101,8 @@ export async function eliminarAsistencia(eventoId: string, asistenciaId: string)
 export async function registrarAsistencia(
   eventoId: string,
   data: Omit<Asistencia, 'id' | 'fechaHora'>,
-): Promise<void> {
-  await addDoc(collection(db, 'eventos', eventoId, 'asistencias'), {
+): Promise<string> {
+  const ref = await addDoc(collection(db, 'eventos', eventoId, 'asistencias'), {
     cedula:          data.cedula          || '',
     nombres:         data.nombres         || '',
     apellidos:       data.apellidos       || '',
@@ -112,10 +112,20 @@ export async function registrarAsistencia(
     rh:              data.rh              || '',
     modo:            data.modo            || 'MANUAL',
     registradoPor:   data.registradoPor   || '',
+    operadorUid:     data.operadorUid     || '',
     ipOperador:      data.ipOperador      || '',
     eventoId,
     fechaHora:       serverTimestamp(),
   })
+  return ref.id
+}
+
+export async function editarAsistencia(
+  eventoId: string,
+  asistenciaId: string,
+  data: Partial<Omit<Asistencia, 'id' | 'fechaHora'>>,
+): Promise<void> {
+  await updateDoc(doc(db, 'eventos', eventoId, 'asistencias', asistenciaId), data as Record<string, unknown>)
 }
 
 // ── Usuarios ──────────────────────────────────────────────────────────────────
@@ -185,6 +195,21 @@ export async function getAsistenciasByOperador(
     const data = d.data() as Asistencia & { eventoId: string }
     return { id: d.id, ...data, eventoId: data.eventoId ?? d.ref.parent.parent?.id ?? '' }
   })
+}
+
+// ── Logs ─────────────────────────────────────────────────────────────────────
+
+export async function registrarLog(data: Omit<Log, 'id' | 'fecha'>): Promise<void> {
+  try {
+    await addDoc(collection(db, 'logs'), { ...data, fecha: serverTimestamp() })
+  } catch { /* non-fatal */ }
+}
+
+export async function getLogs(limitN = 1000): Promise<Log[]> {
+  const snap = await getDocs(
+    query(collection(db, 'logs'), orderBy('fecha', 'desc'), limit(limitN)),
+  )
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as Log))
 }
 
 // ── Backup ────────────────────────────────────────────────────────────────────

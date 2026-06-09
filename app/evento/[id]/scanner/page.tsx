@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { collection, onSnapshot } from 'firebase/firestore'
 import { db } from '../../../lib/firebase'
-import { getEventoByToken, registrarAsistencia, checkDuplicado } from '../../../lib/firestore'
+import { getEventoByToken, registrarAsistencia, checkDuplicado, registrarLog } from '../../../lib/firestore'
 import type { Evento } from '../../../lib/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -474,11 +474,12 @@ export default function PublicScannerPage() {
     setConfirmSaving(true); setConfirmError('')
     try {
       const edad = confirmForm.fechaNacimiento ? calcEdad(confirmForm.fechaNacimiento) : 0
-      await registrarAsistencia(evento.id!, {
+      const asistenciaId = await registrarAsistencia(evento.id!, {
         cedula: confirmForm.cedula, nombres: confirmForm.nombres, apellidos: confirmForm.apellidos,
         fechaNacimiento: confirmForm.fechaNacimiento, edad, sexo: (confirmForm.sexo || undefined) as 'M' | 'F' | undefined,
         rh: confirmForm.rh, modo: confirmForm.modo, registradoPor: operatorName,
       })
+      registrarLog({ tipo: 'REGISTRO', eventoId: evento.id!, eventoNombre: evento.nombre, asistenciaId, cedula: confirmForm.cedula, nombreAsistente: `${confirmForm.apellidos} ${confirmForm.nombres}`.trim(), operadorUid: '', operadorNombre: operatorName, operadorEmail: '', detalles: `Modo: ${confirmForm.modo} (escáner público)`, ip: '' })
       showToast('#22c55e', `✅ ${confirmForm.apellidos} ${confirmForm.nombres}`)
       setConfirmForm(null); setLog([])
     } catch (e: unknown) { setConfirmError((e as { message?: string }).message ?? 'Error al guardar') }
@@ -492,7 +493,8 @@ export default function PublicScannerPage() {
     setManualSaving(true); setManualError('')
     try {
       if (await checkDuplicado(evento.id!, cedula.trim())) { setManualError('Cédula ya registrada'); return }
-      await registrarAsistencia(evento.id!, { cedula: cedula.trim(), nombres: capitalize(nombres.trim()), apellidos: capitalize(apellidos.trim()), fechaNacimiento, edad: calcEdad(fechaNacimiento), sexo: sexo as 'M' | 'F', rh: rh.trim(), modo: 'MANUAL', registradoPor: operatorName })
+      const asistenciaId = await registrarAsistencia(evento.id!, { cedula: cedula.trim(), nombres: capitalize(nombres.trim()), apellidos: capitalize(apellidos.trim()), fechaNacimiento, edad: calcEdad(fechaNacimiento), sexo: sexo as 'M' | 'F', rh: rh.trim(), modo: 'MANUAL', registradoPor: operatorName })
+      registrarLog({ tipo: 'REGISTRO', eventoId: evento.id!, eventoNombre: evento.nombre, asistenciaId, cedula: cedula.trim(), nombreAsistente: `${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`.trim(), operadorUid: '', operadorNombre: operatorName, operadorEmail: '', detalles: 'Modo: MANUAL (escáner público)', ip: '' })
       showToast('#22c55e', `✅ ${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`)
       setShowManual(false); setManualForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
     } catch (e: unknown) { setManualError((e as { message?: string }).message ?? 'Error') }

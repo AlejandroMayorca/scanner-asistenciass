@@ -5,9 +5,9 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, BarChart2, Camera, Check, ClipboardList, Copy, FileSpreadsheet,
-  Link2, MapPin, Pencil, Trash2, Users,
+  Link2, MapPin, Pencil, Trash2, Users, X,
 } from 'lucide-react'
-import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, generarTokenAcceso, toDate } from '../../../lib/firestore'
+import { getEvento, getAsistencias, getTotalAsistencias, registrarAsistencia, checkDuplicado, eliminarAsistencia, editarAsistencia, registrarLog, generarTokenAcceso, toDate } from '../../../lib/firestore'
 import { exportarExcel } from '../../../lib/export'
 import { Spinner } from '../../../components/ui/Spinner'
 import { useAuth } from '../../../context/AuthContext'
@@ -107,7 +107,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
         return
       }
       const edad = calcEdad(form.fechaNacimiento)
-      await registrarAsistencia(eventoId, {
+      const asistenciaId = await registrarAsistencia(eventoId, {
         cedula: form.cedula.trim(),
         nombres: form.nombres.trim(),
         apellidos: form.apellidos.trim(),
@@ -119,6 +119,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
         registradoPor: displayName,
         operadorUid: user?.uid ?? '',
       })
+      registrarLog({ tipo: 'REGISTRO', eventoId, eventoNombre: evento?.nombre ?? '', asistenciaId, cedula: form.cedula.trim(), nombreAsistente: `${form.apellidos.trim()} ${form.nombres.trim()}`, operadorUid: user?.uid ?? '', operadorNombre: displayName, operadorEmail: user?.email ?? '', detalles: 'Modo: MANUAL', ip: '' })
       showBanner('ok', `✅ ${form.apellidos} ${form.nombres} — ${edad} años`)
       setForm({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '', rh: '' })
       onRegistered()
@@ -286,6 +287,7 @@ function RegistrarTab({ eventoId, evento, onRegistered }: { eventoId: string; ev
 // ── Tab: Asistentes ───────────────────────────────────────────────────────────
 
 function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento | null }) {
+  const { user, displayName } = useAuth()
   const [asistencias, setAsistencias] = useState<Asistencia[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -293,6 +295,9 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
   const [exporting, setExporting] = useState(false)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [editingAsis, setEditingAsis] = useState<Asistencia | null>(null)
+  const [editForm, setEditForm] = useState({ cedula: '', nombres: '', apellidos: '', fechaNacimiento: '', sexo: '' as 'M' | 'F' | '', rh: '' })
+  const [editSaving, setEditSaving] = useState(false)
 
   const load = () => getAsistencias(eventoId).then(a => { setAsistencias(a); setLoading(false) })
 
@@ -324,11 +329,58 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
     if (!confirmDel) return
     setDeleting(true)
     try {
+      const asis = asistencias.find(a => a.id === confirmDel)
       await eliminarAsistencia(eventoId, confirmDel)
+      if (asis) {
+        registrarLog({ tipo: 'ELIMINACION', eventoId, eventoNombre: evento?.nombre ?? '', asistenciaId: confirmDel, cedula: asis.cedula, nombreAsistente: `${asis.apellidos} ${asis.nombres}`.trim(), operadorUid: user?.uid ?? '', operadorNombre: displayName, operadorEmail: user?.email ?? '', detalles: 'Asistencia eliminada', ip: '' })
+      }
       setConfirmDel(null)
       load()
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const openEdit = (a: Asistencia) => {
+    setEditingAsis(a)
+    setEditForm({ cedula: a.cedula, nombres: a.nombres, apellidos: a.apellidos, fechaNacimiento: a.fechaNacimiento ?? '', sexo: (a.sexo ?? '') as 'M' | 'F' | '', rh: a.rh ?? '' })
+  }
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingAsis) return
+    setEditSaving(true)
+    try {
+      const newData: Partial<Asistencia> = {
+        cedula:          editForm.cedula.trim(),
+        nombres:         editForm.nombres.trim(),
+        apellidos:       editForm.apellidos.trim(),
+        fechaNacimiento: editForm.fechaNacimiento || undefined,
+        sexo:            (editForm.sexo || undefined) as 'M' | 'F' | undefined,
+        rh:              editForm.rh.trim() || undefined,
+      }
+      if (editForm.fechaNacimiento) newData.edad = calcEdad(editForm.fechaNacimiento)
+
+      await editarAsistencia(eventoId, editingAsis.id!, newData)
+
+      const campos: Array<[string, string | undefined, string | undefined]> = [
+        ['Cédula',     editingAsis.cedula,           newData.cedula],
+        ['Nombres',    editingAsis.nombres,           newData.nombres],
+        ['Apellidos',  editingAsis.apellidos,         newData.apellidos],
+        ['Nacimiento', editingAsis.fechaNacimiento,   newData.fechaNacimiento],
+        ['Sexo',       editingAsis.sexo,              newData.sexo],
+        ['RH',         editingAsis.rh,                newData.rh],
+      ]
+      const cambios = campos
+        .filter(([, v, n]) => n !== undefined && v !== n)
+        .map(([label, v, n]) => `${label}: '${v || '—'}' → '${n || '—'}'`)
+
+      registrarLog({ tipo: 'EDICION', eventoId, eventoNombre: evento?.nombre ?? '', asistenciaId: editingAsis.id!, cedula: editingAsis.cedula, nombreAsistente: `${editingAsis.apellidos} ${editingAsis.nombres}`.trim(), operadorUid: user?.uid ?? '', operadorNombre: displayName, operadorEmail: user?.email ?? '', detalles: cambios.length > 0 ? cambios.join('; ') : 'Sin cambios', ip: '' })
+
+      setEditingAsis(null)
+      load()
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -417,13 +469,22 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                       {a.registradoPor || '—'}
                     </td>
                     <td className="px-2 py-3">
-                      <button
-                        onClick={() => setConfirmDel(a.id!)}
-                        className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition"
-                        title="Eliminar registro"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEdit(a)}
+                          className="p-1.5 rounded-lg text-zinc-600 hover:text-blue-400 hover:bg-blue-400/10 transition"
+                          title="Editar registro"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDel(a.id!)}
+                          className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition"
+                          title="Eliminar registro"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -466,6 +527,65 @@ function AsistentesTab({ eventoId, evento }: { eventoId: string; evento: Evento 
                 {deleting ? <><Spinner size="sm" /> Eliminando…</> : 'Sí, eliminar'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editingAsis && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" onClick={() => setEditingAsis(null)} />
+          <div className="relative bg-[#18181b] border border-[#27272a] rounded-2xl p-6 max-w-sm w-full max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <p className="font-semibold text-white">Editar asistente</p>
+              <button onClick={() => setEditingAsis(null)} className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition">
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleEditSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1.5">Cédula</label>
+                <input value={editForm.cedula} onChange={e => setEditForm(f => ({ ...f, cedula: e.target.value }))} className={FIELD} inputMode="numeric" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Nombres</label>
+                  <input value={editForm.nombres} onChange={e => setEditForm(f => ({ ...f, nombres: e.target.value }))} className={FIELD} />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Apellidos</label>
+                  <input value={editForm.apellidos} onChange={e => setEditForm(f => ({ ...f, apellidos: e.target.value }))} className={FIELD} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Nacimiento</label>
+                  <input type="date" value={editForm.fechaNacimiento} onChange={e => setEditForm(f => ({ ...f, fechaNacimiento: e.target.value }))} className={`${FIELD} [color-scheme:dark]`} />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1.5">Sexo</label>
+                  <select value={editForm.sexo} onChange={e => setEditForm(f => ({ ...f, sexo: e.target.value as 'M' | 'F' | '' }))} className={`${FIELD} [color-scheme:dark]`}>
+                    <option value="">—</option>
+                    <option value="M">Masculino</option>
+                    <option value="F">Femenino</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1.5">RH</label>
+                <input value={editForm.rh} onChange={e => setEditForm(f => ({ ...f, rh: e.target.value }))} placeholder="O+" className={FIELD} />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setEditingAsis(null)}
+                  className="flex-1 py-2.5 rounded-xl border border-[#27272a] text-zinc-400 text-sm hover:bg-white/5 transition">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={editSaving}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 disabled:opacity-60 transition flex items-center justify-center gap-2">
+                  {editSaving ? <><Spinner size="sm" /> Guardando…</> : 'Guardar cambios'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

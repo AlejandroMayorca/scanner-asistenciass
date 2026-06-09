@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { doc, getDoc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../../../../lib/firebase'
-import { registrarAsistencia, checkDuplicado } from '../../../../lib/firestore'
+import { registrarAsistencia, checkDuplicado, registrarLog } from '../../../../lib/firestore'
 import { useAuth } from '../../../../context/AuthContext'
 import type { Evento } from '../../../../lib/types'
 
@@ -481,7 +481,8 @@ export default function ScannerPage() {
     setConfirmSaving(true); setConfirmError('')
     try {
       const edad = confirmForm.fechaNacimiento ? calcEdad(confirmForm.fechaNacimiento) : 0
-      await registrarAsistencia(eventoId, { cedula:confirmForm.cedula, nombres:confirmForm.nombres, apellidos:confirmForm.apellidos, fechaNacimiento:confirmForm.fechaNacimiento, edad, sexo:(confirmForm.sexo||undefined) as 'M'|'F'|undefined, rh:confirmForm.rh, modo:confirmForm.modo, registradoPor:displayName, operadorUid:user?.uid??'' })
+      const asistenciaId = await registrarAsistencia(eventoId, { cedula:confirmForm.cedula, nombres:confirmForm.nombres, apellidos:confirmForm.apellidos, fechaNacimiento:confirmForm.fechaNacimiento, edad, sexo:(confirmForm.sexo||undefined) as 'M'|'F'|undefined, rh:confirmForm.rh, modo:confirmForm.modo, registradoPor:displayName, operadorUid:user?.uid??'' })
+      registrarLog({ tipo:'REGISTRO', eventoId, eventoNombre:evento?.nombre??'', asistenciaId, cedula:confirmForm.cedula, nombreAsistente:`${confirmForm.apellidos} ${confirmForm.nombres}`.trim(), operadorUid:user?.uid??'', operadorNombre:displayName, operadorEmail:user?.email??'', detalles:`Modo: ${confirmForm.modo}`, ip:'' })
       showToast('#22c55e',`✅ ${confirmForm.apellidos} ${confirmForm.nombres}`)
       setConfirmForm(null); setLog([])
     } catch(e:unknown) { setConfirmError((e as {message?:string}).message??'Error al guardar') }
@@ -496,7 +497,8 @@ export default function ScannerPage() {
     setManualSaving(true); setManualError('')
     try {
       if (await checkDuplicado(eventoId,cedula.trim())) { setManualError('Cédula ya registrada'); return }
-      await registrarAsistencia(eventoId,{cedula:cedula.trim(),nombres:capitalize(nombres.trim()),apellidos:capitalize(apellidos.trim()),fechaNacimiento,edad:calcEdad(fechaNacimiento),sexo:sexo as 'M'|'F',rh:rh.trim(),modo:'MANUAL',registradoPor:displayName,operadorUid:user?.uid??''})
+      const asistenciaId = await registrarAsistencia(eventoId,{cedula:cedula.trim(),nombres:capitalize(nombres.trim()),apellidos:capitalize(apellidos.trim()),fechaNacimiento,edad:calcEdad(fechaNacimiento),sexo:sexo as 'M'|'F',rh:rh.trim(),modo:'MANUAL',registradoPor:displayName,operadorUid:user?.uid??''})
+      registrarLog({ tipo:'REGISTRO', eventoId, eventoNombre:evento?.nombre??'', asistenciaId, cedula:cedula.trim(), nombreAsistente:`${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`.trim(), operadorUid:user?.uid??'', operadorNombre:displayName, operadorEmail:user?.email??'', detalles:'Modo: MANUAL', ip:'' })
       showToast('#22c55e',`✅ ${capitalize(apellidos.trim())} ${capitalize(nombres.trim())}`)
       setShowManual(false); setManualForm({cedula:'',nombres:'',apellidos:'',fechaNacimiento:'',sexo:'',rh:''})
     } catch(e:unknown) { setManualError((e as {message?:string}).message??'Error') }

@@ -1,10 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  AlertCircle, CheckCircle, ClipboardList, Copy, Download, Eye,
-  Shield, Trash2, Upload, UserPlus, Users, X,
+  Activity, AlertCircle, CheckCircle, ClipboardList, Copy, Download, Eye,
+  Filter, Shield, Trash2, Upload, UserPlus, Users, X,
 } from 'lucide-react'
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth'
 import { initializeApp, getApps } from 'firebase/app'
@@ -15,13 +15,14 @@ import {
   getEventos, eliminarEvento, getTotalAsistencias,
   getFullBackup, restaurarBackup,
   getOperadores, setOperador, updateOperador, getAsistenciasByOperador,
+  getLogs,
 } from '../../lib/firestore'
 import type { BackupData } from '../../lib/firestore'
-import { exportarJson } from '../../lib/export'
+import { exportarJson, exportarLogsExcel } from '../../lib/export'
 import { useAuth } from '../../context/AuthContext'
 import { Modal } from '../../components/ui/Modal'
 import { Spinner } from '../../components/ui/Spinner'
-import type { UserProfile, Evento, OperadorPerfil, Asistencia } from '../../lib/types'
+import type { UserProfile, Evento, OperadorPerfil, Asistencia, Log } from '../../lib/types'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 
@@ -41,7 +42,7 @@ function getSecondaryAuth() {
 const FIELD =
   'w-full bg-[#111113] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition'
 
-type AdminTab = 'usuarios' | 'operadores' | 'eventos' | 'backup'
+type AdminTab = 'usuarios' | 'operadores' | 'eventos' | 'backup' | 'logs'
 
 export default function AdminPage() {
   const { profile, user } = useAuth()
@@ -68,6 +69,7 @@ export default function AdminPage() {
     { id: 'operadores', label: '🧑‍💼 Operadores' },
     { id: 'eventos',    label: '📅 Eventos'    },
     { id: 'backup',     label: '💾 Backup'     },
+    { id: 'logs',       label: '📋 Logs'       },
   ]
 
   return (
@@ -100,6 +102,7 @@ export default function AdminPage() {
         {tab === 'operadores' && <OperadoresTab />}
         {tab === 'eventos'    && <EventosAdminTab />}
         {tab === 'backup'     && <BackupTab />}
+        {tab === 'logs'       && <LogsTab />}
       </div>
     </div>
   )
@@ -243,9 +246,12 @@ function UsuariosTab() {
 
 // ── Operadores tab ────────────────────────────────────────────────────────────
 
+type OpStats = Record<string, { registros: number; ediciones: number; eliminaciones: number }>
+
 function OperadoresTab() {
   const { user } = useAuth()
   const [operadores, setOperadores]     = useState<OperadorPerfil[]>([])
+  const [logsStats, setLogsStats]       = useState<OpStats>({})
   const [loading, setLoading]           = useState(true)
   const [showCreate, setShowCreate]     = useState(false)
   const [creating, setCreating]         = useState(false)
@@ -258,7 +264,17 @@ function OperadoresTab() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    setOperadores(await getOperadores())
+    const [ops, logs] = await Promise.all([getOperadores(), getLogs()])
+    setOperadores(ops)
+    const stats: OpStats = {}
+    for (const l of logs) {
+      if (!l.operadorUid || !['REGISTRO', 'EDICION', 'ELIMINACION'].includes(l.tipo)) continue
+      if (!stats[l.operadorUid]) stats[l.operadorUid] = { registros: 0, ediciones: 0, eliminaciones: 0 }
+      if (l.tipo === 'REGISTRO')   stats[l.operadorUid].registros++
+      else if (l.tipo === 'EDICION')    stats[l.operadorUid].ediciones++
+      else if (l.tipo === 'ELIMINACION') stats[l.operadorUid].eliminaciones++
+    }
+    setLogsStats(stats)
     setLoading(false)
   }, [])
 
@@ -340,6 +356,13 @@ function OperadoresTab() {
                     ? `Último acceso ${format(toDate(op.ultimoAcceso), "d MMM yyyy HH:mm", { locale: es })}`
                     : 'Sin accesos'}
                 </p>
+                {logsStats[op.uid] && (
+                  <div className="flex gap-2 mt-1">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-semibold">{logsStats[op.uid].registros} reg</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-semibold">{logsStats[op.uid].ediciones} ed</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 font-semibold">{logsStats[op.uid].eliminaciones} el</span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
@@ -805,6 +828,216 @@ function BackupTab() {
         Solo los administradores pueden gestionar backups. Los archivos incluyen datos personales —
         manéjalos con cuidado.
       </p>
+    </div>
+  )
+}
+
+// ── Logs tab ──────────────────────────────────────────────────────────────────
+
+const TIPO_BADGE: Record<string, { label: string; cls: string }> = {
+  REGISTRO:   { label: 'Registro',    cls: 'bg-emerald-500/20 text-emerald-400' },
+  EDICION:    { label: 'Edición',     cls: 'bg-amber-500/20 text-amber-400' },
+  ELIMINACION:{ label: 'Eliminación', cls: 'bg-red-500/20 text-red-400' },
+  LOGIN:      { label: 'Login',       cls: 'bg-blue-500/20 text-blue-400' },
+  LOGOUT:     { label: 'Logout',      cls: 'bg-zinc-700 text-zinc-400' },
+}
+
+const LOG_PAGE_SIZE = 50
+
+function LogsTab() {
+  const [logs, setLogs]           = useState<Log[]>([])
+  const [eventos, setEventos]     = useState<Evento[]>([])
+  const [operadores, setOperadores] = useState<OperadorPerfil[]>([])
+  const [loading, setLoading]     = useState(true)
+  const [exporting, setExporting] = useState(false)
+
+  const [filterEvento,   setFilterEvento]   = useState('')
+  const [filterOperador, setFilterOperador] = useState('')
+  const [filterTipo,     setFilterTipo]     = useState('')
+  const [fechaInicio,    setFechaInicio]    = useState('')
+  const [fechaFin,       setFechaFin]       = useState('')
+  const [page, setPage] = useState(1)
+
+  useEffect(() => {
+    Promise.all([getLogs(), getEventos(), getOperadores()])
+      .then(([l, e, o]) => { setLogs(l); setEventos(e); setOperadores(o); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
+
+  const resetFilters = () => {
+    setFilterEvento(''); setFilterOperador(''); setFilterTipo('')
+    setFechaInicio(''); setFechaFin(''); setPage(1)
+  }
+
+  const filtered = useMemo(() => {
+    return logs.filter(l => {
+      if (filterEvento   && l.eventoId      !== filterEvento)   return false
+      if (filterOperador && l.operadorUid   !== filterOperador) return false
+      if (filterTipo     && l.tipo          !== filterTipo)     return false
+      if (fechaInicio) {
+        const inicio = new Date(fechaInicio)
+        if (toDate(l.fecha) < inicio) return false
+      }
+      if (fechaFin) {
+        const fin = new Date(fechaFin); fin.setHours(23, 59, 59, 999)
+        if (toDate(l.fecha) > fin) return false
+      }
+      return true
+    })
+  }, [logs, filterEvento, filterOperador, filterTipo, fechaInicio, fechaFin])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / LOG_PAGE_SIZE))
+  const paginated  = filtered.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE)
+
+  const handleExport = async () => {
+    setExporting(true)
+    try { await exportarLogsExcel(filtered) } finally { setExporting(false) }
+  }
+
+  const hasFilters = !!(filterEvento || filterOperador || filterTipo || fechaInicio || fechaFin)
+
+  // Deduplicate operadores from logs (include public scanner operators too)
+  const logOperadores = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const l of logs) {
+      if (l.operadorUid && !seen.has(l.operadorUid)) seen.set(l.operadorUid, l.operadorNombre || l.operadorEmail)
+    }
+    return Array.from(seen.entries()).map(([uid, name]) => ({ uid, name }))
+  }, [logs])
+
+  if (loading) return <div className="flex justify-center py-16"><Spinner size="lg" /></div>
+
+  return (
+    <div>
+      {/* Filters */}
+      <div className="bg-[#111113] border border-[#27272a] rounded-2xl p-4 mb-4 space-y-3">
+        <div className="flex items-center gap-2 mb-1">
+          <Filter size={13} className="text-zinc-500" />
+          <span className="text-xs text-zinc-500 font-medium">Filtros</span>
+          {hasFilters && (
+            <button onClick={resetFilters} className="ml-auto text-xs text-zinc-500 hover:text-white underline transition">
+              Limpiar
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <select value={filterEvento} onChange={e => { setFilterEvento(e.target.value); setPage(1) }}
+            className={`${FIELD} [color-scheme:dark] text-xs py-2`}>
+            <option value="">Todos los eventos</option>
+            {eventos.map(ev => <option key={ev.id} value={ev.id!}>{ev.nombre}</option>)}
+          </select>
+          <select value={filterOperador} onChange={e => { setFilterOperador(e.target.value); setPage(1) }}
+            className={`${FIELD} [color-scheme:dark] text-xs py-2`}>
+            <option value="">Todos los operadores</option>
+            {logOperadores.map(o => <option key={o.uid} value={o.uid}>{o.name}</option>)}
+          </select>
+          <select value={filterTipo} onChange={e => { setFilterTipo(e.target.value); setPage(1) }}
+            className={`${FIELD} [color-scheme:dark] text-xs py-2`}>
+            <option value="">Todos los tipos</option>
+            <option value="REGISTRO">Registro</option>
+            <option value="EDICION">Edición</option>
+            <option value="ELIMINACION">Eliminación</option>
+            <option value="LOGIN">Login</option>
+            <option value="LOGOUT">Logout</option>
+          </select>
+          <div className="flex gap-2">
+            <input type="date" value={fechaInicio} onChange={e => { setFechaInicio(e.target.value); setPage(1) }}
+              className={`${FIELD} [color-scheme:dark] text-xs py-2 flex-1`} placeholder="Desde" title="Fecha inicio" />
+            <input type="date" value={fechaFin} onChange={e => { setFechaFin(e.target.value); setPage(1) }}
+              className={`${FIELD} [color-scheme:dark] text-xs py-2 flex-1`} placeholder="Hasta" title="Fecha fin" />
+          </div>
+        </div>
+      </div>
+
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-zinc-500 text-xs">
+          {filtered.length} log{filtered.length !== 1 ? 's' : ''}
+          {hasFilters && ' (filtrados)'}
+          {' · '}{logs.length} total
+        </p>
+        <button onClick={handleExport} disabled={exporting || filtered.length === 0}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold transition active:scale-95">
+          {exporting ? <Spinner size="sm" /> : <Download size={13} />}
+          Exportar Excel
+        </button>
+      </div>
+
+      {/* Table */}
+      {filtered.length === 0 ? (
+        <div className="text-center py-16 text-zinc-600">
+          <Activity size={36} className="mx-auto mb-2 opacity-30" />
+          <p>{hasFilters ? 'No hay logs con esos filtros.' : 'No hay logs aún.'}</p>
+        </div>
+      ) : (
+        <div className="bg-[#111113] border border-[#27272a] rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[#27272a] text-zinc-500 text-xs">
+                  <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Fecha/Hora</th>
+                  <th className="text-left px-4 py-3 font-medium">Tipo</th>
+                  <th className="text-left px-4 py-3 font-medium">Operador</th>
+                  <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Evento</th>
+                  <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Asistente</th>
+                  <th className="text-left px-4 py-3 font-medium hidden xl:table-cell">Detalles</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginated.map(l => {
+                  const badge = TIPO_BADGE[l.tipo] ?? { label: l.tipo, cls: 'bg-zinc-700 text-zinc-400' }
+                  return (
+                    <tr key={l.id} className="border-b border-[#1a1a1d] last:border-0 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 text-zinc-400 text-xs whitespace-nowrap font-mono">
+                        {format(toDate(l.fecha), 'dd/MM/yyyy HH:mm:ss')}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-white text-xs font-medium leading-tight truncate max-w-[140px]">{l.operadorNombre || '—'}</p>
+                        {l.operadorEmail && <p className="text-zinc-500 text-[10px] truncate max-w-[140px]">{l.operadorEmail}</p>}
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell text-zinc-400 text-xs truncate max-w-[140px]">
+                        {l.eventoNombre || '—'}
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell">
+                        {l.nombreAsistente ? (
+                          <>
+                            <p className="text-white text-xs leading-tight">{l.nombreAsistente}</p>
+                            {l.cedula && <p className="text-blue-400 font-mono text-[10px]">{l.cedula}</p>}
+                          </>
+                        ) : <span className="text-zinc-600">—</span>}
+                      </td>
+                      <td className="px-4 py-3 hidden xl:table-cell text-zinc-500 text-xs max-w-[200px] truncate" title={l.detalles}>
+                        {l.detalles || '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-[#27272a] text-xs text-zinc-500">
+              <span>Página {page} de {totalPages} · mostrando {paginated.length} de {filtered.length}</span>
+              <div className="flex gap-2">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-40 transition">
+                  ‹ Anterior
+                </button>
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-40 transition">
+                  Siguiente ›
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
